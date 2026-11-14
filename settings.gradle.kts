@@ -8,6 +8,9 @@ include("kmpkt-messenger")
 include("kmpkt-command-bus")
 include("kmpkt-event-bus")
 include("kmpkt-query-bus")
+include("kmpkt-persistence")
+include("kmpkt-persistence-jdbc")
+include("kmpkt-messenger-persistence")
 
 dependencyResolutionManagement {
     repositories {
