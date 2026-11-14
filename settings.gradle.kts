@@ -4,6 +4,7 @@ include("kmpkt-di")
 include("kmpkt-di-compiler-api")
 include("kmpkt-di-compiler")
 include("kmpkt-worker")
+include("kmpkt-messenger")
 
 dependencyResolutionManagement {
     repositories {
