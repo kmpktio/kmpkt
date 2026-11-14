@@ -3,6 +3,7 @@ rootProject.name = "kmpkt"
 include("kmpkt-di")
 include("kmpkt-di-compiler-api")
 include("kmpkt-di-compiler")
+include("kmpkt-worker")
 
 dependencyResolutionManagement {
     repositories {
