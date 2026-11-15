@@ -15,6 +15,8 @@ include("kmpkt-aggregate")
 include("kmpkt-event-store")
 include("kmpkt-aggregate-snapshot")
 include("kmpkt-serialization-kotlinx")
+include("kmpkt-policy")
+include("kmpkt-projection")
 
 dependencyResolutionManagement {
     repositories {
