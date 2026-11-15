@@ -19,6 +19,18 @@ include("kmpkt-policy")
 include("kmpkt-projection")
 include("kmpkt-clikt-bridge")
 include("kmpkt-ktor-bridge")
+include("examples:todo-cqrs:core")
+include("examples:todo-cqrs:app")
+include("examples:todo-event-sourced:core")
+include("examples:todo-event-sourced:app")
+include("examples:messenger:core")
+include("examples:messenger:app")
+include("examples:modulith:todos")
+include("examples:modulith:audit")
+include("examples:modulith:telemetry")
+include("examples:modulith:features")
+include("examples:modulith:runtime")
+include("examples:modulith:app")
 
 dependencyResolutionManagement {
     repositories {
