@@ -17,6 +17,8 @@ include("kmpkt-aggregate-snapshot")
 include("kmpkt-serialization-kotlinx")
 include("kmpkt-policy")
 include("kmpkt-projection")
+include("kmpkt-clikt-bridge")
+include("kmpkt-ktor-bridge")
 
 dependencyResolutionManagement {
     repositories {
