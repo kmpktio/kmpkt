@@ -11,6 +11,10 @@ include("kmpkt-query-bus")
 include("kmpkt-persistence")
 include("kmpkt-persistence-jdbc")
 include("kmpkt-messenger-persistence")
+include("kmpkt-aggregate")
+include("kmpkt-event-store")
+include("kmpkt-aggregate-snapshot")
+include("kmpkt-serialization-kotlinx")
 
 dependencyResolutionManagement {
     repositories {
