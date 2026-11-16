@@ -128,4 +128,40 @@ class AggregateRootTest :
                 }
             failure.message.orEmpty().shouldContain("expected 1")
         }
+
+        test("restore sets version and applies state from a snapshot-like event, rejecting invalid preconditions") {
+            class RestorableCounter(
+                id: AggregateUuid<Counter>,
+            ) : BaseAggregateRoot<Counter>(id) {
+                var value: Int = 0
+                    private set
+
+                fun applyRestored(event: CounterIncremented) = restore(event)
+
+                override fun updateState(event: io.kmpkt.aggregate.event.DomainEvent<Counter>) {
+                    when (event) {
+                        is CounterIncremented -> value++
+                    }
+                }
+            }
+
+            val id = AggregateUuid.generate<Counter>()
+            val otherId = AggregateUuid.generate<Counter>()
+            val counter = RestorableCounter(id)
+
+            shouldThrow<IllegalArgumentException> {
+                counter.applyRestored(CounterIncremented(otherId, 1, now))
+            }
+            shouldThrow<IllegalArgumentException> {
+                counter.applyRestored(CounterIncremented(id, 0, now))
+            }
+
+            counter.applyRestored(CounterIncremented(id, 5, now))
+            counter.version shouldBe 5
+            counter.value shouldBe 1
+
+            shouldThrow<IllegalArgumentException> {
+                counter.applyRestored(CounterIncremented(id, 6, now))
+            }
+        }
     })
