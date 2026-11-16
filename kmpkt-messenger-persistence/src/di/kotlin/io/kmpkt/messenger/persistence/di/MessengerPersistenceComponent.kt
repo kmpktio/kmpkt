@@ -6,7 +6,9 @@ import io.kmpkt.di.compiler.SimpleComponent
 import io.kmpkt.messenger.di.MessengerComponent
 import io.kmpkt.messenger.persistence.di.pass.WirePersistentTransportsPass
 import io.kmpkt.messenger.persistence.middleware.TransactionMiddleware
+import io.kmpkt.messenger.persistence.worker.PersistenceWorkLock
 import io.kmpkt.persistence.di.PersistenceComponent
+import io.kmpkt.worker.WorkLock
 import kotlin.reflect.KClass
 
 public class MessengerPersistenceComponent : SimpleComponent {
@@ -14,6 +16,7 @@ public class MessengerPersistenceComponent : SimpleComponent {
 
     override fun ContainerBuilder.register() {
         service<TransactionMiddleware>()
+        service<PersistenceWorkLock> { bind<WorkLock>() }
         addPass(WirePersistentTransportsPass())
     }
 }

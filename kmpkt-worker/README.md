@@ -13,6 +13,8 @@ loops forever), and having them twice means getting them wrong twice.
 
 - `Work`: one pass. Returns how many units it handled, so the worker knows whether to come straight back or
   wait. Throwing means the pass could not finish.
+- `WorkLock` / `LockedWork`: optional leader-lock decorator around any `Work` so only one worker instance
+  executes a pass at a time while others stand by for failover.
 - `RetryStrategy`: what happens after a pass threw - `none()`, `fixed(times)`, `backOff()`, `forever()`.
   Returning `null` means give up.
 - `Worker`: the loop, in two kinds that differ in **what becomes of a failure the retry strategy gave up on**.
