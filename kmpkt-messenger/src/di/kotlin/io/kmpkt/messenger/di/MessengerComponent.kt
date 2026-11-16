@@ -11,6 +11,7 @@ import io.kmpkt.di.compiler.literal
 import io.kmpkt.di.compiler.typeRef
 import io.kmpkt.messenger.bus.DefaultMessageBus
 import io.kmpkt.messenger.bus.MessageBus
+import io.kmpkt.messenger.bus.middleware.AddBusNameStampMiddleware
 import io.kmpkt.messenger.di.pass.RegisterMessageHandlersPass
 import io.kmpkt.messenger.handler.DefaultHandlerRegistry
 import io.kmpkt.messenger.handler.HandlerRegistry
@@ -18,6 +19,8 @@ import io.kmpkt.messenger.handler.middleware.HandleMessageMiddleware
 import io.kmpkt.messenger.message.MessageHandler
 import io.kmpkt.messenger.middleware.Middleware
 import io.kmpkt.messenger.retry.RetryStrategy
+import io.kmpkt.messenger.retry.middleware.FailedMessageProcessingMiddleware
+import io.kmpkt.messenger.retry.middleware.RetryMiddleware
 import io.kmpkt.messenger.transport.SyncTransport
 import io.kmpkt.messenger.transport.Transport
 import io.kmpkt.messenger.transport.middleware.SendMessageMiddleware
@@ -143,24 +146,82 @@ public class MessengerComponent : Component<MessengerOptions> {
                 if (isDefault) bind<HandlerRegistry>()
             }
         val handle =
-            service<HandleMessageMiddleware>(ServiceId("messenger.bus.$name.handle")) {
-                argument<HandlerRegistry>(reference(registry.id))
-                argument(bus.policy)
+            if (bus.defaultMiddleware.handle) {
+                reference(
+                    service<HandleMessageMiddleware>(ServiceId("messenger.bus.$name.handle")) {
+                        argument<HandlerRegistry>(reference(registry.id))
+                        argument(bus.policy)
+                    }.id,
+                )
+            } else {
+                null
             }
-        val send = sendingFor(busRef, bus, transports)
+        val busName = if (bus.defaultMiddleware.busName) addingBusNameFor(busRef) else null
+        val send = if (bus.defaultMiddleware.send) sendingFor(busRef, bus, transports) else null
+        val failedProcessing =
+            if (bus.defaultMiddleware.failedMessageProcessing) failedProcessingFor(busRef, transports) else null
+        val retry = if (bus.defaultMiddleware.retry) retryingFor(busRef, transports) else null
 
         service<DefaultMessageBus>(ServiceId("messenger.bus.$name")) {
             bind<MessageBus>(name)
             if (isDefault) bind<MessageBus>()
-            // Routing first: a message that goes to a transport passes nothing
-            // else on the way out. Then the bus's own middleware in the order given; handling is innermost.
+            // Bus name first, then routing, failure-replay restoration, retries, user middleware, and handling last.
             argument<List<Middleware>>(
                 Argument.Sequence(
-                    listOfNotNull(send) + bus.middleware.map { Argument.Service(ServiceReference.ByKey(it)) } + reference(handle.id),
+                    listOfNotNull(busName, send, failedProcessing, retry) +
+                        bus.middleware.map { key -> Argument.Service(ServiceReference.ByKey(key)) } +
+                        listOfNotNull(handle),
                 ),
             )
             argument<HandlerRegistry>(reference(registry.id))
         }
+    }
+
+    private fun ContainerBuilder.addingBusNameFor(busRef: BusRef): Argument {
+        val middleware =
+            service<AddBusNameStampMiddleware>(ServiceId("messenger.bus.${busRef.name}.busName")) {
+                argument("busName", literal(busRef.name))
+            }
+        return reference(middleware.id)
+    }
+
+    private fun ContainerBuilder.failedProcessingFor(
+        busRef: BusRef,
+        transports: Map<TransportRef<*>, TransportDeclaration>,
+    ): Argument? {
+        val failureNames =
+            transports.values
+                .mapNotNull { it.failureTransport?.name }
+                .distinct()
+        if (failureNames.isEmpty()) return null
+
+        val middleware =
+            service<FailedMessageProcessingMiddleware>(ServiceId("messenger.bus.${busRef.name}.failedProcessing")) {
+                argument("failureTransportNames", Argument.Sequence(failureNames.map(::literal)))
+            }
+        return reference(middleware.id)
+    }
+
+    /**
+     * Registers [RetryMiddleware] for this bus when at least one non-sync transport defines a [RetryStrategy].
+     */
+    private fun ContainerBuilder.retryingFor(
+        busRef: BusRef,
+        transports: Map<TransportRef<*>, TransportDeclaration>,
+    ): Argument? {
+        val retryable = transports.values.filter { !it.isSync && it.retry != null }
+        if (retryable.isEmpty()) return null
+
+        val strategies = retryable.map { literal(it.name) to reference(strategyId(it)) }
+        val sources = retryable.map { literal(it.name) to reference(queueId(it)) }
+
+        val retry =
+            service<RetryMiddleware>(ServiceId("messenger.bus.${busRef.name}.retry")) {
+                argument("strategies", Argument.Dictionary(strategies))
+                argument("transports", Argument.Dictionary(sources))
+            }
+
+        return reference(retry.id)
     }
 
     /**

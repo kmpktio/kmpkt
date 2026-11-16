@@ -160,7 +160,7 @@ class MessengerComponentTest :
             compilation.entryPoint("handlers") shouldBe "messenger.bus.default.handlers"
             compilation.arguments("messenger.bus.default") shouldBe
                 mapOf(
-                    "middleware" to Argument.Sequence(listOf(byId("messenger.bus.default.handle"))),
+                    "middleware" to Argument.Sequence(listOf(byId("messenger.bus.default.busName"), byId("messenger.bus.default.handle"))),
                     "handlerRegistry" to byId("messenger.bus.default.handlers"),
                 )
             compilation.arguments("messenger.bus.default.handle") shouldBe
@@ -199,6 +199,7 @@ class MessengerComponentTest :
                     "middleware" to
                         Argument.Sequence(
                             listOf(
+                                byId("messenger.bus.command.busName"),
                                 byId(Outer::class.qualifiedName!!),
                                 byId(Inner::class.qualifiedName!!),
                                 byId("messenger.bus.command.handle"),
@@ -208,7 +209,14 @@ class MessengerComponentTest :
                 )
             compilation.arguments("messenger.bus.event") shouldBe
                 mapOf(
-                    "middleware" to Argument.Sequence(listOf(byId(Inner::class.qualifiedName!!), byId("messenger.bus.event.handle"))),
+                    "middleware" to
+                        Argument.Sequence(
+                            listOf(
+                                byId("messenger.bus.event.busName"),
+                                byId(Inner::class.qualifiedName!!),
+                                byId("messenger.bus.event.handle"),
+                            ),
+                        ),
                     "handlerRegistry" to byId("messenger.bus.event.handlers"),
                 )
             compilation.arguments("messenger.bus.command.handle")["policy"] shouldBe literal(HandlerPolicy.SINGLE)
@@ -382,7 +390,12 @@ class MessengerComponentTest :
             compilation.entryPoint("async") shouldBe "messenger.transport.async"
             compilation.arguments("messenger.bus.command")["middleware"] shouldBe
                 Argument.Sequence(
-                    listOf(byId("messenger.bus.command.send"), byId(Outer::class.qualifiedName!!), byId("messenger.bus.command.handle")),
+                    listOf(
+                        byId("messenger.bus.command.busName"),
+                        byId("messenger.bus.command.send"),
+                        byId(Outer::class.qualifiedName!!),
+                        byId("messenger.bus.command.handle"),
+                    ),
                 )
             compilation.arguments("messenger.bus.command.send") shouldBe
                 mapOf(
@@ -549,5 +562,58 @@ class MessengerComponentTest :
                     "The transport \"async\" has \"again\" as its failure transport, which is a sync transport: it would handle " +
                         "the failed message again rather than keep it.",
                 )
+        }
+
+        test("defaultMiddleware can disable send and handle while keeping retry") {
+            // Act
+            val compilation =
+                Compilation("bus" to bus("relay")) { container ->
+                    container.messenger {
+                        transport<Queue>("outbox") {
+                            retry<MultiplierRetryStrategy>()
+                        }
+                        bus("relay") {
+                            defaultMiddleware {
+                                send = false
+                                handle = false
+                            }
+                            middleware<Outer>()
+                        }
+                    }
+                    container.service<Outer>()
+                }
+
+            // Assert
+            compilation.errors.shouldBeEmpty()
+            compilation.arguments("messenger.bus.relay")["middleware"] shouldBe
+                Argument.Sequence(
+                    listOf(
+                        byId("messenger.bus.relay.busName"),
+                        byId("messenger.bus.relay.retry"),
+                        byId(Outer::class.qualifiedName!!),
+                    ),
+                )
+        }
+
+        test("defaultMiddleware none disables send, retry, and handle") {
+            // Act
+            val compilation =
+                Compilation("bus" to bus("custom")) { container ->
+                    container.messenger {
+                        transport<Queue>("outbox") {
+                            retry<MultiplierRetryStrategy>()
+                        }
+                        bus("custom") {
+                            defaultMiddleware { none() }
+                            middleware<Outer>()
+                        }
+                    }
+                    container.service<Outer>()
+                }
+
+            // Assert
+            compilation.errors.shouldBeEmpty()
+            compilation.arguments("messenger.bus.custom")["middleware"] shouldBe
+                Argument.Sequence(listOf(byId(Outer::class.qualifiedName!!)))
         }
     })
