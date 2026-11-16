@@ -10,50 +10,68 @@ import io.kmpkt.worker.Work
 import org.slf4j.Logger
 
 /**
- * One pass of consuming [transport]: take whatever it has, dispatch each envelope onto [messageBus], ack what
- * went through and reject what threw.
+ * One pass of consuming [transports] in priority order: polls each transport from first to last,
+ * processes the first non-empty batch by dispatching each envelope onto [messageBus], acking what
+ * went through and rejecting what threw.
  *
- * A single envelope's failure is handled here, because rejecting it and carrying on is what a transport means
- * by failure - the others in the batch are unaffected. A failure of [Transport.receive] itself is not handled
- * here: it propagates, and the [io.kmpkt.worker.Worker]'s retry strategy decides whether the transport
- * is worth asking again.
+ * Checking [transports] in order and returning as soon as one yields envelopes ensures higher-priority
+ * transports are always drained before lower-priority ones.
  *
- * Retries are handled in the bus pipeline by [io.kmpkt.messenger.retry.middleware.RetryMiddleware], which
- * signals a scheduled redelivery via [RetryScheduledException]. With a [failureTransport], an envelope that
- * is permanently given up on is sent there before it is rejected, so that it is put aside rather than lost.
- * Both apply to queued transports; log-based transports (`kmpkt-projection`, `kmpkt-policy`) decide for
- * themselves what a rejection means and cannot be sent to.
+ * Retries are handled in the bus pipeline by [io.kmpkt.messenger.retry.middleware.RetryMiddleware],
+ * which signals a scheduled redelivery via [RetryScheduledException]. When an envelope is permanently
+ * given up on, it is forwarded to `failureTransports[transportName] ?: defaultFailureTransport` (if
+ * configured) before being rejected on its source transport.
  */
 public class TransportWork(
-    private val transport: Transport,
-    private val transportName: String,
+    private val transports: Map<String, Transport>,
     private val messageBus: MessageBus,
     private val logger: Logger,
-    private val failureTransport: Transport? = null,
+    private val failureTransports: Map<String, Transport> = emptyMap(),
+    private val defaultFailureTransport: Transport? = null,
 ) : Work {
-    override suspend fun run(): Int {
-        val envelopes = transport.receive()
+    public constructor(
+        transport: Transport,
+        transportName: String,
+        messageBus: MessageBus,
+        logger: Logger,
+        failureTransport: Transport? = null,
+    ) : this(
+        transports = mapOf(transportName to transport),
+        messageBus = messageBus,
+        logger = logger,
+        defaultFailureTransport = failureTransport,
+    )
 
-        envelopes.forEach { envelope ->
-            try {
-                messageBus.dispatch(envelope.with(ReceivedStamp(transportName)))
-                transport.ack(envelope)
-            } catch (_: RetryScheduledException) {
-                transport.reject(envelope)
-            } catch (failure: Exception) {
-                logger.error("Rejecting a message from transport '{}'", transportName, failure)
-                putAside(envelope, failure)
-                transport.reject(envelope)
+    override suspend fun run(): Int {
+        for ((transportName, transport) in transports) {
+            val envelopes = transport.receive()
+            if (envelopes.isEmpty()) continue
+
+            envelopes.forEach { envelope ->
+                try {
+                    messageBus.dispatch(envelope.with(ReceivedStamp(transportName)))
+                    transport.ack(envelope)
+                } catch (_: RetryScheduledException) {
+                    transport.reject(envelope)
+                } catch (failure: Exception) {
+                    logger.error("Rejecting a message from transport '{}'", transportName, failure)
+                    putAside(transportName, envelope, failure)
+                    transport.reject(envelope)
+                }
             }
+
+            return envelopes.size
         }
 
-        return envelopes.size
+        return 0
     }
 
     private suspend fun putAside(
+        transportName: String,
         envelope: Envelope,
         failure: Exception,
     ) {
+        val failureTransport = failureTransports[transportName] ?: defaultFailureTransport
         // Not twice: a message that fails again while the failure transport itself is being consumed stays
         // rejected there, instead of being fed back into the queue it just came out of.
         if (failureTransport == null || envelope.last<SentToFailureTransportStamp>() != null) return

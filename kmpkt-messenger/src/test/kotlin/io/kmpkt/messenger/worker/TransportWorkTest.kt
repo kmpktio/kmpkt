@@ -188,4 +188,24 @@ class TransportWorkTest :
             failed.pending() shouldBe emptyList()
             failed.rejected() shouldBe listOf(putAside)
         }
+
+        test("drains prioritized transports in order without starving higher priority") {
+            val high = QueueTransport()
+            val low = QueueTransport()
+            val highEnv = Envelope(Greet("High"))
+            val lowEnv = Envelope(Greet("Low"))
+            high.enqueue(highEnv)
+            low.enqueue(lowEnv)
+            val received = mutableListOf<Envelope>()
+            val bus = RecordingMessageBus { received += it }
+            val work = TransportWork(linkedMapOf("high" to high, "low" to low), bus, logger)
+
+            work.run() shouldBe 1
+            received shouldBe listOf(highEnv.with(ReceivedStamp("high")))
+
+            work.run() shouldBe 1
+            received shouldBe listOf(highEnv.with(ReceivedStamp("high")), lowEnv.with(ReceivedStamp("low")))
+
+            work.run() shouldBe 0
+        }
     })

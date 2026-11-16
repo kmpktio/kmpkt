@@ -5,6 +5,8 @@ import io.kmpkt.di.compiler.fixture.parameter
 import io.kmpkt.di.compiler.typeRef
 import io.kmpkt.messenger.bus.DefaultMessageBus
 import io.kmpkt.messenger.bus.MessageBus
+import io.kmpkt.messenger.bus.MessengerCatalog
+import io.kmpkt.messenger.bus.RoutableMessageBus
 import io.kmpkt.messenger.bus.middleware.AddBusNameStampMiddleware
 import io.kmpkt.messenger.handler.DefaultHandlerRegistry
 import io.kmpkt.messenger.handler.HandlerPolicy
@@ -48,6 +50,17 @@ public fun FakeTypeOracle.declareMessenger() {
         parameter<List<Middleware>>("middleware", hasDefault = true),
         parameter<HandlerRegistry>("handlerRegistry"),
         supertypes = listOf(typeRef<MessageBus>()),
+    )
+    declare<RoutableMessageBus>(
+        parameter<Map<String, MessageBus>>("buses"),
+        parameter<MessageBus?>("fallback", hasDefault = true),
+        supertypes = listOf(typeRef<MessageBus>()),
+    )
+    declare<MessengerCatalog>(
+        parameter<Map<String, MessageBus>>("buses"),
+        parameter<Map<String, Transport>>("transports"),
+        parameter<Map<String, Transport>>("failureTransports", hasDefault = true),
+        parameter<MessageBus?>("defaultBus", hasDefault = true),
     )
     declare<SyncTransport>(
         parameter<Lazy<MessageBus>>("messageBus"),
