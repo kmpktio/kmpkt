@@ -1,10 +1,15 @@
 package io.kmpkt.messenger.worker
 
+import io.kmpkt.messenger.bus.DefaultMessageBus
 import io.kmpkt.messenger.bus.MessageBus
 import io.kmpkt.messenger.fixture.Greet
+import io.kmpkt.messenger.handler.DefaultHandlerRegistry
 import io.kmpkt.messenger.message.Envelope
 import io.kmpkt.messenger.message.Message
+import io.kmpkt.messenger.middleware.Middleware
 import io.kmpkt.messenger.retry.MultiplierRetryStrategy
+import io.kmpkt.messenger.retry.RetryScheduledException
+import io.kmpkt.messenger.retry.middleware.RetryMiddleware
 import io.kmpkt.messenger.stamp.DelayStamp
 import io.kmpkt.messenger.stamp.ReceivedStamp
 import io.kmpkt.messenger.stamp.RedeliveryStamp
@@ -104,42 +109,33 @@ class TransportWorkTest :
             transport.acked.shouldBeEmpty()
         }
 
-        test("with a strategy, a failed envelope is sent back for another try before it is rejected") {
+        test("with RetryMiddleware on the bus, a failed envelope is sent back for another try before it is rejected") {
             // Arrange
             val transport = QueueTransport()
             val envelope = Envelope(Greet("Milch"))
             transport.enqueue(envelope)
             var failuresLeft = 1
-            val bus = RecordingMessageBus { if (failuresLeft-- > 0) throw RuntimeException("boom") }
-            val work =
-                TransportWork(transport, "queue", bus, logger, MultiplierRetryStrategy(maxRetries = 3, delay = 2.seconds, jitter = 0.0))
+            val strategy = MultiplierRetryStrategy(maxRetries = 3, delay = 2.seconds, jitter = 0.0)
+            val bus =
+                DefaultMessageBus(
+                    middleware =
+                        listOf(
+                            RetryMiddleware(mapOf("queue" to strategy), mapOf("queue" to transport), logger),
+                            Middleware { _, _ -> if (failuresLeft-- > 0) throw RuntimeException("boom") else envelope },
+                        ),
+                    handlerRegistry = DefaultHandlerRegistry(),
+                )
+            val work = TransportWork(transport, "queue", bus, logger)
 
             // Act
             work.run()
             work.run()
 
             // Assert
-            val redelivered = envelope.with(RedeliveryStamp(1), DelayStamp(2.seconds))
+            val received = envelope.with(ReceivedStamp("queue"))
+            val redelivered = received.with(RedeliveryStamp(1), DelayStamp(2.seconds))
             transport.rejected shouldBe listOf(envelope)
             transport.acked shouldBe listOf(redelivered)
-        }
-
-        test("with a strategy that has had enough, a failed envelope is rejected and not sent back") {
-            // Arrange
-            val transport = QueueTransport()
-            val envelope = Envelope(Greet("Milch")).with(RedeliveryStamp(1))
-            transport.enqueue(envelope)
-            val bus = RecordingMessageBus { throw RuntimeException("boom") }
-            val work = TransportWork(transport, "queue", bus, logger, MultiplierRetryStrategy(maxRetries = 1))
-
-            // Act
-            val first = work.run()
-            val second = work.run()
-
-            // Assert
-            first shouldBe 1
-            second shouldBe 0
-            transport.rejected shouldBe listOf(envelope)
         }
 
         test("with a failure transport, an envelope that is given up on is put aside there, and rejected where it came from") {
@@ -160,23 +156,21 @@ class TransportWorkTest :
                 listOf(envelope.with(SentToFailureTransportStamp("queue", "IllegalStateException", "boom")))
         }
 
-        test("retries come first: the failure transport only gets what the strategy has given up on") {
+        test("does not send to failureTransport when RetryScheduledException signals a retry") {
             // Arrange
             val transport = QueueTransport()
             val failed = InMemoryTransport()
-            transport.enqueue(Envelope(Greet("Milch")))
-            val bus = RecordingMessageBus { throw IllegalStateException("boom") }
-            val work =
-                TransportWork(transport, "queue", bus, logger, MultiplierRetryStrategy(maxRetries = 1, jitter = 0.0), failed)
+            val envelope = Envelope(Greet("Milch"))
+            transport.enqueue(envelope)
+            val bus = RecordingMessageBus { throw RetryScheduledException(IllegalStateException("boom")) }
+            val work = TransportWork(transport, "queue", bus, logger, failureTransport = failed)
 
             // Act
             work.run()
-            val afterFirst = failed.pending()
-            work.run()
 
             // Assert
-            afterFirst shouldBe emptyList()
-            failed.pending().map { RedeliveryStamp.retryCountOf(it) } shouldBe listOf(1)
+            transport.rejected shouldBe listOf(envelope)
+            failed.pending() shouldBe emptyList()
         }
 
         test("consuming the failure transport itself does not feed a failing message back into it") {

@@ -81,7 +81,6 @@ class MessengerExampleConfiguration : Configuration<MessengerApp> {
             argument("transport", byKey<Transport>("async-jobs"))
             argument("transportName", literal("async-jobs"))
             argument("messageBus", byKey<MessageBus>("commands"))
-            argument("retryStrategy", Argument.Service(ServiceReference.ById(ServiceId("messenger.transport.async-jobs.retry"))))
             argument("failureTransport", byKey<Transport>("dead-letter"))
         }
 

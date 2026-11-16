@@ -178,6 +178,8 @@ public class BusOptions internal constructor() {
     internal val handles: List<TypeRef>
         field = mutableListOf<TypeRef>()
 
+    internal val defaultMiddleware: DefaultMiddlewareOptions = DefaultMiddlewareOptions()
+
     /** One handler per message for a command bus, any number for an event bus. */
     public var policy: HandlerPolicy = HandlerPolicy.SINGLE
 
@@ -230,6 +232,40 @@ public class BusOptions internal constructor() {
      */
     public inline fun <reified M : Middleware> middleware(qualifier: String? = null) {
         middleware(ServiceKey(typeRef<M>(), qualifier))
+    }
+
+    /**
+     * Controls which built-in middlewares (`send`, `retry`, `handle`) are wired into this bus.
+     */
+    public fun defaultMiddleware(configure: DefaultMiddlewareOptions.() -> Unit) {
+        defaultMiddleware.apply(configure)
+    }
+}
+
+@ContainerDsl
+public class DefaultMiddlewareOptions internal constructor() {
+    /** Includes `AddBusNameStampMiddleware` at the beginning of the chain. */
+    public var busName: Boolean = true
+
+    /** Includes `SendMessageMiddleware` when routes or non-sync transports exist. */
+    public var send: Boolean = true
+
+    /** Includes `FailedMessageProcessingMiddleware` when any transport uses a failure transport. */
+    public var failedMessageProcessing: Boolean = true
+
+    /** Includes `RetryMiddleware` when any queued transport defines a retry strategy. */
+    public var retry: Boolean = true
+
+    /** Includes `HandleMessageMiddleware` at the end of the chain. */
+    public var handle: Boolean = true
+
+    /** Disables all built-in middlewares (`busName`, `send`, `failedMessageProcessing`, `retry`, `handle`). */
+    public fun none() {
+        busName = false
+        send = false
+        failedMessageProcessing = false
+        retry = false
+        handle = false
     }
 }
 
