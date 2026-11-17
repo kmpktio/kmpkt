@@ -20,6 +20,7 @@ jsoup = "1.23.2"
 ktlint-plugin = "14.2.0"
 pitest-plugin = "1.19.0"
 arcmutate-kotlin = "1.5.2"
+arcmutate-git = "2.3.4"
 ksp = "2.3.14"
 kotlinpoet = "2.4.0"
 kctfork = "0.14.0"
@@ -57,6 +58,7 @@ kotest-assertions-core = { module = "io.kotest:kotest-assertions-core", version.
 kotest-property = { module = "io.kotest:kotest-property", version.ref = "kotest" }
 kotest-extensions-pitest = { module = "io.kotest:kotest-extensions-pitest", version.ref = "kotest" }
 arcmutate-kotlin-plugin = { module = "com.arcmutate:pitest-kotlin-plugin", version.ref = "arcmutate-kotlin" }
+arcmutate-git-plugin = { module = "com.arcmutate:pitest-git-plugin", version.ref = "arcmutate-git" }
 konsist = { module = "com.lemonappdev:konsist", version.ref = "konsist" }
 mockk = { module = "io.mockk:mockk", version.ref = "mockk" }
 jsoup = { module = "org.jsoup:jsoup", version.ref = "jsoup" }

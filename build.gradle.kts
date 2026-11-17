@@ -14,6 +14,13 @@ subprojects
         module.pluginManager.withPlugin("info.solidsoft.pitest") {
             if (rootProject.file("arcmutate-licence.txt").exists()) {
                 module.dependencies.add("pitest", libs.arcmutate.kotlin.plugin)
+                module.dependencies.add("pitest", libs.arcmutate.git.plugin)
+                val pitestFeatures = providers.gradleProperty("pitest.features").orNull
+                if (!pitestFeatures.isNullOrBlank()) {
+                    module.extensions.configure<info.solidsoft.gradle.pitest.PitestPluginExtension> {
+                        features.addAll(pitestFeatures.split(",").map(String::trim).filter(String::isNotEmpty))
+                    }
+                }
             }
         }
         module.pluginManager.apply("maven-publish")
