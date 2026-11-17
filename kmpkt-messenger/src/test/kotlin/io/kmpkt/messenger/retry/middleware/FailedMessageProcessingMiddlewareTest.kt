@@ -28,7 +28,13 @@ class FailedMessageProcessingMiddlewareTest :
         test("passes through untouched when not from a failure transport or without failure stamp") {
             val middleware = FailedMessageProcessingMiddleware("dead-letter")
 
-            val normal = Envelope(Greet("Milch")).with(ReceivedStamp("async-jobs"))
+            val noReceived = Envelope(Greet("Milch"))
+            middleware.handle(noReceived) { it } shouldBe noReceived
+
+            val normal =
+                Envelope(Greet("Milch"))
+                    .with(SentToFailureTransportStamp("async-jobs", "IllegalStateException", "boom"))
+                    .with(ReceivedStamp("async-jobs"))
             middleware.handle(normal) { it } shouldBe normal
 
             val withoutStamp = Envelope(Greet("Milch")).with(ReceivedStamp("dead-letter"))

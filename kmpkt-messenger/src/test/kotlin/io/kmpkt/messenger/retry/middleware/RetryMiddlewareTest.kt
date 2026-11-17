@@ -34,6 +34,30 @@ class RetryMiddlewareTest :
             shouldThrow<IllegalStateException> {
                 middleware.handle(other) { throw IllegalStateException("boom") }
             }
+
+            val missingTransport =
+                RetryMiddleware(
+                    strategies = mapOf("queue" to MultiplierRetryStrategy(maxRetries = 2)),
+                    transports = emptyMap(),
+                    logger = logger,
+                )
+            shouldThrow<IllegalStateException> {
+                missingTransport.handle(Envelope(Greet("Milch")).with(ReceivedStamp("queue"))) {
+                    throw IllegalStateException("no-transport")
+                }
+            }
+
+            val missingStrategy =
+                RetryMiddleware(
+                    strategies = emptyMap(),
+                    transports = mapOf("queue" to transport),
+                    logger = logger,
+                )
+            shouldThrow<IllegalStateException> {
+                missingStrategy.handle(Envelope(Greet("Milch")).with(ReceivedStamp("queue"))) {
+                    throw IllegalStateException("no-strategy")
+                }
+            }
             transport.pending() shouldBe emptyList()
         }
 
