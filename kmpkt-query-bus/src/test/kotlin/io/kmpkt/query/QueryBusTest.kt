@@ -87,4 +87,24 @@ class QueryBusTest :
             // Assert
             thrown shouldBe failure
         }
+
+        test("rethrows HandlerFailedException when multiple failures occurred") {
+            // Arrange
+            val first = IllegalStateException("first")
+            val second = IllegalArgumentException("second")
+            val bus =
+                object : MessageBus {
+                    override suspend fun dispatch(message: Message): Envelope =
+                        throw HandlerFailedException(message, first, second)
+
+                    override suspend fun dispatch(envelope: Envelope): Envelope = envelope
+                }
+            val queryBus = QueryBus(bus)
+
+            // Act
+            val thrown = shouldThrow<HandlerFailedException> { queryBus.ask(FindList("list-4")) }
+
+            // Assert
+            thrown.failures shouldBe listOf(first, second)
+        }
     })

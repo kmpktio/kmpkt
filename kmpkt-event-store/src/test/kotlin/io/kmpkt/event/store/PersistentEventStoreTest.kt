@@ -85,5 +85,6 @@ class PersistentEventStoreTest :
 
             val emptyStore = PersistentEventStore(InMemoryPersistence(), InMemoryCounterSerializer())
             emptyStore.load(Counter.TYPE, id).shouldBeEmpty()
+            NoOpEventCheckpointPredicate().isCheckpoint(events.first()) shouldBe false
         }
     })
