@@ -15,6 +15,13 @@ jobs:
       - uses: gradle/actions/setup-gradle@v4
       - name: Publish to Maven Local
         run: ./gradlew publishToMavenLocal
+      - name: Restore Arcmutate license if configured
+        env:
+          ARCMUTATE_LICENCE: ${{ secrets.ARCMUTATE_LICENCE }}
+        run: |
+          if [ -n "$ARCMUTATE_LICENCE" ]; then
+            printf '%s\n' "$ARCMUTATE_LICENCE" > arcmutate-licence.txt
+          fi
       - name: Run Pitest
         run: ./gradlew pitest
       - name: Upload mutation reports

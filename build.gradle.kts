@@ -11,6 +11,11 @@ plugins {
 subprojects
     .filter { it.name.startsWith("kmpkt-") }
     .forEach { module ->
+        module.pluginManager.withPlugin("info.solidsoft.pitest") {
+            if (rootProject.file("arcmutate-licence.txt").exists()) {
+                module.dependencies.add("pitest", libs.arcmutate.kotlin.plugin)
+            }
+        }
         module.pluginManager.apply("maven-publish")
         module.afterEvaluate {
             val javaComponent = module.components["java"] as? AdhocComponentWithVariants
