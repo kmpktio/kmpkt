@@ -26,7 +26,8 @@ class SnapshotAggregateRepositoryTest :
     FunSpec({
         test("reloads from full history when no snapshot exists yet") {
             // Arrange
-            val repository = repository(interval = 10)
+            val eventStore = InMemoryEventStore(SnapshotEventCheckpointPredicate())
+            val repository = repository(eventStore, interval = 10)
             val counter = Counter.new()
             counter.increment()
 
@@ -36,6 +37,7 @@ class SnapshotAggregateRepositoryTest :
 
             // Assert
             loaded.value shouldBe 1
+            eventStore.load(Counter.TYPE, counter.id).none { it is CounterSnapshotted } shouldBe true
         }
 
         test("takes a snapshot event once the strategy says to, and loads from it afterwards") {

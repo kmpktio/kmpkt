@@ -60,13 +60,12 @@ tasks.register("check") {
 
 tasks.register("pitest") {
     group = "verification"
-    description = "Runs Pitest mutation tests across configured subprojects and the DI Gradle plugin."
+    description = "Runs Pitest mutation tests across configured subprojects."
     dependsOn(
         subprojects
             .filter { it.buildFile.exists() && it.buildFile.readText().contains("pitest") }
             .map { "${it.path}:pitest" },
     )
-    dependsOn(gradle.includedBuild("kmpkt-di-compiler-plugin").task(":pitest"))
 }
 
 tasks.register("publish") {

@@ -1,5 +1,6 @@
 package io.kmpkt.snapshot.strategy
 
+import io.kmpkt.snapshot.fixture.Counter
 import io.kotest.assertions.withClue
 import io.kotest.core.spec.style.FunSpec
 import io.kotest.matchers.shouldBe
@@ -43,5 +44,18 @@ class VersionIntervalSnapshotStrategyTest :
             everyVersion.shouldSnapshot(previousVersion = 0, newVersion = 1) shouldBe true
             everyVersion.shouldSnapshot(previousVersion = 7, newVersion = 8) shouldBe true
             everyVersion.shouldSnapshot(previousVersion = 8, newVersion = 8) shouldBe false
+        }
+
+        test("evaluates aggregate persisted and current versions") {
+            // Arrange
+            val everyTwo = VersionIntervalSnapshotStrategy(interval = 2)
+            val counter = Counter.new()
+
+            // Act + Assert
+            counter.increment()
+            everyTwo.shouldSnapshot(counter) shouldBe false
+
+            counter.increment()
+            everyTwo.shouldSnapshot(counter) shouldBe true
         }
     })
