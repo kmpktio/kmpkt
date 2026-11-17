@@ -5,6 +5,7 @@ import io.kmpkt.di.compiler.fixture.parameter
 import io.kmpkt.di.compiler.typeRef
 import io.kmpkt.messenger.bus.DefaultMessageBus
 import io.kmpkt.messenger.bus.MessageBus
+import io.kmpkt.messenger.bus.middleware.AddBusNameStampMiddleware
 import io.kmpkt.messenger.handler.DefaultHandlerRegistry
 import io.kmpkt.messenger.handler.HandlerPolicy
 import io.kmpkt.messenger.handler.HandlerRegistry
@@ -14,12 +15,15 @@ import io.kmpkt.messenger.message.MessageHandler
 import io.kmpkt.messenger.middleware.Middleware
 import io.kmpkt.messenger.retry.MultiplierRetryStrategy
 import io.kmpkt.messenger.retry.RetryStrategy
+import io.kmpkt.messenger.retry.middleware.FailedMessageProcessingMiddleware
+import io.kmpkt.messenger.retry.middleware.RetryMiddleware
 import io.kmpkt.messenger.transport.InMemoryTransport
 import io.kmpkt.messenger.transport.SyncTransport
 import io.kmpkt.messenger.transport.Transport
 import io.kmpkt.messenger.transport.middleware.SendMessageMiddleware
 import io.kmpkt.messenger.transport.registry.DefaultTransportRegistry
 import io.kmpkt.messenger.transport.registry.TransportRegistry
+import org.slf4j.Logger
 import java.time.Clock
 import kotlin.reflect.KClass
 import kotlin.time.Duration
@@ -62,6 +66,20 @@ public fun FakeTypeOracle.declareMessenger() {
         parameter<TransportRegistry>("transportRegistry"),
         parameter<Map<String, Transport>>("transports"),
         parameter<Clock>("clock"),
+        supertypes = listOf(typeRef<Middleware>()),
+    )
+    declare<AddBusNameStampMiddleware>(
+        parameter<String>("busName"),
+        supertypes = listOf(typeRef<Middleware>()),
+    )
+    declare<FailedMessageProcessingMiddleware>(
+        parameter<Collection<String>>("failureTransportNames"),
+        supertypes = listOf(typeRef<Middleware>()),
+    )
+    declare<RetryMiddleware>(
+        parameter<Map<String, RetryStrategy>>("strategies"),
+        parameter<Map<String, Transport>>("transports"),
+        parameter<Logger>("logger", hasDefault = true),
         supertypes = listOf(typeRef<Middleware>()),
     )
     declare<MultiplierRetryStrategy>(

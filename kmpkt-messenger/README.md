@@ -21,8 +21,18 @@ with no event-sourcing or DI-framework knowledge of any kind.
   instead of queueing it - which is what makes inline handling a routing *decision*, and so the only way a
   `RouteStamp` can override a routed message type back to inline: `RouteStamp.Sync`. Nothing is ever queued
   on it, so its `receive`/`ack`/`reject` throw rather than quietly doing nothing.
-- `Worker`: polls a transport and dispatches what it finds back onto the bus. Concrete queued transports
-  (e.g. an in-memory channel) live in their own, optional modules.
+- `AddBusNameStampMiddleware`: stamps envelopes with `BusNameStamp` on their entry bus so workers
+  and replays know which bus originally dispatched them.
+- `FailedMessageProcessingMiddleware`: restores the original `ReceivedStamp` from
+  `SentToFailureTransportStamp` when re-consuming messages from a failure transport.
+- `RetryMiddleware`: wraps downstream middleware and handler execution for messages received from
+  a queued transport (`ReceivedStamp`) and re-sends failed envelopes to their source transport with
+  `RedeliveryStamp` and `DelayStamp` according to the configured `RetryStrategy`.
+- `defaultMiddleware { ... }` (DI): selectively enables/disables built-in middlewares (`busName`,
+  `send`, `failedMessageProcessing`, `retry`, `handle`) or disables all with `none()`.
+- `Worker` (`TransportWork`): polls a transport, dispatches what it finds onto the bus, acks
+  successes, and rejects (or moves to `failureTransport` when retries are exhausted) failures.
+  Concrete queued transports (e.g. an in-memory channel) live in their own, optional modules.
 
 ## Usage
 
