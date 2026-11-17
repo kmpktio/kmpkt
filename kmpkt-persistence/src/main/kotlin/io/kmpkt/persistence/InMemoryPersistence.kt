@@ -220,7 +220,7 @@ public class InMemoryPersistence : Persistence {
         }
     }
 
-    private suspend inline fun <R> withTx(crossinline block: () -> R): R =
+    private suspend fun <R> withTx(block: () -> R): R =
         if (coroutineContext[InMemoryTransactionContext]?.owner === this) {
             block()
         } else {
