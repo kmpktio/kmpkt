@@ -6,7 +6,7 @@ import io.kmpkt.aggregate.value.AggregateId
 import io.kmpkt.example.todo.es.domain.event.TodoAdded
 import io.kmpkt.example.todo.es.domain.event.TodoCompleted
 import io.kmpkt.example.todo.es.domain.event.TodoPinned
-import java.time.Instant
+import java.time.Clock
 
 class TodoItem internal constructor(
     id: AggregateId<TodoItem>,
@@ -18,15 +18,15 @@ class TodoItem internal constructor(
     var pinned: Boolean = false
         private set
 
-    fun complete(now: Instant = Instant.now()) {
+    fun complete(clock: Clock = Clock.systemUTC()) {
         if (!completed) {
-            recordThat(TodoCompleted(id, version + 1, now))
+            recordThat(TodoCompleted(id, version + 1, clock.instant()))
         }
     }
 
-    fun pin(now: Instant = Instant.now()) {
+    fun pin(clock: Clock = Clock.systemUTC()) {
         if (!pinned) {
-            recordThat(TodoPinned(id, version + 1, now))
+            recordThat(TodoPinned(id, version + 1, clock.instant()))
         }
     }
 
@@ -43,10 +43,10 @@ class TodoItem internal constructor(
         fun create(
             id: AggregateId<TodoItem>,
             title: String,
-            now: Instant = Instant.now(),
+            clock: Clock = Clock.systemUTC(),
         ): TodoItem =
             TodoItem(id).apply {
-                recordThat(TodoAdded(id, version = 1, occurredAt = now, title = title))
+                recordThat(TodoAdded(id, version = 1, occurredAt = clock.instant(), title = title))
             }
 
         internal fun fromHistory(history: List<DomainEvent<TodoItem>>): TodoItem =
