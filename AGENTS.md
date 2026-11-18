@@ -19,3 +19,11 @@
 
 - **Do not enumerate what is obvious in code:** In KDoc and comments, describe the purpose concisely without listing concrete implementations, parameters, or registered items that are already visible right below (e.g., `Registers messenger CLI commands for [CliktComponent].` rather than listing every command).
 - **Comment *why*, not *what*:** Avoid inline comments that restate Kotlin syntax or control flow; only add short comments for non-obvious invariants, concurrency guarantees, or ordering requirements.
+
+## CLI Command Rules
+
+- **Naming:** Name Clikt command classes as `VerbObjectCommand` (e.g., `ConsumeCommand`, `SetupTransportsCommand`, `ShowFailedCommand`, `RetryFailedCommand`, `RemoveFailedCommand`).
+- **Validate bounds on the option itself:** Use Clikt constraints such as `.restrictTo(min = 1)` (or `min = 0` when zero is allowed) / `.check(...)` directly on numeric options instead of manual range checks in `run()`.
+- **Reject conflicting target arguments:** When a command accepts positional targets alongside `--all`, reject both being passed together with `UsageError` rather than letting `--all` silently win.
+- **Register in DI:** Register every new `CliktCommand` in its module's DI `SimpleComponent` (`MessengerCliktComponent`) and cover it in the component wiring test.
+
