@@ -28,6 +28,7 @@ public class TransportWork(
     private val logger: Logger,
     private val failureTransports: Map<String, Transport> = emptyMap(),
     private val defaultFailureTransport: Transport? = null,
+    private val onFailure: () -> Unit = {},
 ) : Work {
     public constructor(
         transport: Transport,
@@ -52,8 +53,10 @@ public class TransportWork(
                     messageBus.dispatch(envelope.with(ReceivedStamp(transportName)))
                     transport.ack(envelope)
                 } catch (_: RetryScheduledException) {
+                    onFailure()
                     transport.reject(envelope)
                 } catch (failure: Exception) {
+                    onFailure()
                     logger.error("Rejecting a message from transport '{}'", transportName, failure)
                     putAside(transportName, envelope, failure)
                     transport.reject(envelope)

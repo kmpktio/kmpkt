@@ -10,6 +10,7 @@ import com.github.ajalt.clikt.parameters.options.flag
 import com.github.ajalt.clikt.parameters.options.option
 import com.github.ajalt.clikt.parameters.types.int
 import com.github.ajalt.clikt.parameters.types.long
+import com.github.ajalt.clikt.parameters.types.restrictTo
 import io.kmpkt.messenger.bus.MessengerCatalog
 import io.kmpkt.messenger.worker.TransportWork
 import io.kmpkt.worker.LockedWork
@@ -20,6 +21,8 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.runBlocking
 import org.slf4j.Logger
 import org.slf4j.LoggerFactory
+import java.time.Clock
+import java.time.Duration
 import kotlin.time.Duration.Companion.milliseconds
 
 /**
@@ -30,6 +33,7 @@ public class ConsumeCommand(
     private val catalog: MessengerCatalog,
     private val logger: Logger = LoggerFactory.getLogger(ConsumeCommand::class.java),
     private val workLock: WorkLock? = null,
+    private val clock: Clock = Clock.systemUTC(),
 ) : CliktCommand(name = "messenger:consume") {
     private val receivers: List<String> by argument(
         help = "Transport names to consume in priority order (highest first).",
@@ -39,9 +43,14 @@ public class ConsumeCommand(
 
     private val bus: String? by option("--bus", help = "Force all consumed envelopes onto this bus instead of using BusNameStamp.")
 
-    private val limit: Int? by option("--limit", help = "Stop after processing this many messages.").int()
+    private val limit: Int? by option("--limit", help = "Stop after processing this many messages.").int().restrictTo(min = 1)
 
-    private val sleepMs: Long by option("--sleep", help = "Idle poll delay in milliseconds.").long().default(500L)
+    private val timeLimitSeconds: Long? by
+        option("--time-limit", help = "Stop after running for this many seconds.").long().restrictTo(min = 1L)
+
+    private val failureLimit: Int? by option("--failure-limit", help = "Stop after this many failed messages.").int().restrictTo(min = 1)
+
+    private val sleepMs: Long by option("--sleep", help = "Idle poll delay in milliseconds.").long().restrictTo(min = 0L).default(500L)
 
     private val lock: String? by option("--lock", help = "Optional WorkLock name for single-active-consumer execution.")
 
@@ -50,18 +59,42 @@ public class ConsumeCommand(
     override fun run() {
         val selected = resolveTransports()
         val targetBus = resolveBus()
-        val baseWork = TransportWork(selected, targetBus, logger, failureTransports = catalog.failureTransports)
+        var failures = 0
+        val baseWork =
+            TransportWork(
+                transports = selected,
+                messageBus = targetBus,
+                logger = logger,
+                failureTransports = catalog.failureTransports,
+                onFailure = { failures++ },
+            )
         val work = wrapWithLock(baseWork)
 
         runBlocking {
             val maxMessages = limit
-            if (maxMessages != null) {
-                var remaining = maxMessages
-                while (remaining > 0) {
+            val maxFailures = failureLimit
+            val deadline = timeLimitSeconds?.let { clock.instant().plusSeconds(it) }
+            if (maxMessages != null || maxFailures != null || deadline != null) {
+                var processedMessages = 0
+                while (
+                    (maxMessages == null || processedMessages < maxMessages) &&
+                    (maxFailures == null || failures < maxFailures) &&
+                    (deadline == null || clock.instant().isBefore(deadline))
+                ) {
                     val processed = work.run()
-                    remaining -= processed
-                    if (processed == 0 && remaining > 0) {
-                        delay(sleepMs)
+                    processedMessages += processed
+                    if (processed == 0) {
+                        val shouldContinue =
+                            (maxMessages == null || processedMessages < maxMessages) &&
+                                (maxFailures == null || failures < maxFailures)
+                        if (!shouldContinue) break
+                        if (deadline != null) {
+                            val remainingMs = Duration.between(clock.instant(), deadline).toMillis()
+                            if (remainingMs <= 0) break
+                            delay(minOf(sleepMs, remainingMs))
+                        } else {
+                            delay(sleepMs)
+                        }
                     }
                 }
             } else {

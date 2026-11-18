@@ -13,6 +13,10 @@ import io.kotest.assertions.throwables.shouldThrow
 import io.kotest.core.spec.style.FunSpec
 import io.kotest.matchers.shouldBe
 import kotlinx.coroutines.runBlocking
+import java.time.Clock
+import java.time.Instant
+import java.time.ZoneId
+import java.time.ZoneOffset
 
 private data class TestJob(val name: String) : Message
 
@@ -108,5 +112,80 @@ class ConsumeCommandTest :
             shouldThrow<CliktError> {
                 ConsumeCommand(catalog).parse(listOf("unknown"))
             }
+        }
+
+        test("stops after --failure-limit failed messages") {
+            val queue = InMemoryTransport()
+            val bus =
+                object : MessageBus {
+                    val seen = mutableListOf<String>()
+
+                    override suspend fun dispatch(message: Message): Envelope = dispatch(Envelope(message))
+
+                    override suspend fun dispatch(envelope: Envelope): Envelope {
+                        val name = (envelope.message as TestJob).name
+                        seen += name
+                        if (name.startsWith("fail")) error("boom")
+                        return envelope
+                    }
+                }
+
+            runBlocking {
+                queue.send(Envelope(TestJob("fail-1")).with(BusNameStamp("default")))
+                queue.send(Envelope(TestJob("ok-after-1")).with(BusNameStamp("default")))
+                queue.send(Envelope(TestJob("fail-2")).with(BusNameStamp("default")))
+                queue.send(Envelope(TestJob("never-reached")).with(BusNameStamp("default")))
+            }
+
+            val catalog = MessengerCatalog(buses = mapOf("default" to bus), transports = mapOf("queue" to queue))
+
+            ConsumeCommand(catalog).parse(listOf("queue", "--failure-limit", "2", "--sleep", "1"))
+
+            bus.seen shouldBe listOf("fail-1", "ok-after-1", "fail-2")
+        }
+
+        test("stops once --time-limit deadline is reached") {
+            val queue = InMemoryTransport()
+            var now = Instant.parse("2026-01-01T00:00:00Z")
+            val mutableClock =
+                object : Clock() {
+                    override fun getZone(): ZoneId = ZoneOffset.UTC
+
+                    override fun withZone(zone: ZoneId): Clock = this
+
+                    override fun instant(): Instant = now
+                }
+            val bus =
+                object : MessageBus {
+                    val seen = mutableListOf<String>()
+
+                    override suspend fun dispatch(message: Message): Envelope = dispatch(Envelope(message))
+
+                    override suspend fun dispatch(envelope: Envelope): Envelope {
+                        seen += (envelope.message as TestJob).name
+                        now = now.plusSeconds(5)
+                        return envelope
+                    }
+                }
+
+            runBlocking {
+                queue.send(Envelope(TestJob("first")).with(BusNameStamp("default")))
+                queue.send(Envelope(TestJob("second")).with(BusNameStamp("default")))
+            }
+
+            val catalog = MessengerCatalog(buses = mapOf("default" to bus), transports = mapOf("queue" to queue))
+
+            ConsumeCommand(catalog, clock = mutableClock).parse(listOf("queue", "--time-limit", "5", "--sleep", "1"))
+
+            bus.seen shouldBe listOf("first")
+        }
+
+        test("rejects non-positive limits") {
+            val catalog = MessengerCatalog(buses = emptyMap(), transports = mapOf("queue" to InMemoryTransport()))
+
+            shouldThrow<CliktError> { ConsumeCommand(catalog).parse(listOf("queue", "--limit", "0")) }
+            shouldThrow<CliktError> { ConsumeCommand(catalog).parse(listOf("queue", "--time-limit", "0")) }
+            shouldThrow<CliktError> { ConsumeCommand(catalog).parse(listOf("queue", "--failure-limit", "-1")) }
+            shouldThrow<CliktError> { ConsumeCommand(catalog).parse(listOf("queue", "--sleep", "-1")) }
         }
     })
