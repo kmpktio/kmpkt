@@ -11,6 +11,8 @@ import io.kmpkt.di.compiler.literal
 import io.kmpkt.di.compiler.typeRef
 import io.kmpkt.messenger.bus.DefaultMessageBus
 import io.kmpkt.messenger.bus.MessageBus
+import io.kmpkt.messenger.bus.MessengerCatalog
+import io.kmpkt.messenger.bus.RoutableMessageBus
 import io.kmpkt.messenger.bus.middleware.AddBusNameStampMiddleware
 import io.kmpkt.messenger.di.pass.RegisterMessageHandlersPass
 import io.kmpkt.messenger.handler.DefaultHandlerRegistry
@@ -104,6 +106,33 @@ public class MessengerComponent : Component<MessengerOptions> {
         registerTransports(transports)
         buses.forEach { (busRef, bus) ->
             registerBus(busRef, bus, transports, isDefault = busRef == default)
+        }
+        registerCatalog(buses, default, transports)
+    }
+
+    private fun ContainerBuilder.registerCatalog(
+        buses: Map<BusRef, BusOptions>,
+        default: BusRef?,
+        transports: Map<TransportRef<*>, TransportDeclaration>,
+    ) {
+        val busEntries = buses.keys.map { busRef -> literal(busRef.name) to reference(ServiceId("messenger.bus.${busRef.name}")) }
+        val queuedTransports = transports.values.filter { !it.isSync }
+        val transportEntries = queuedTransports.map { literal(it.name) to reference(queueId(it)) }
+        val failureEntries =
+            queuedTransports.mapNotNull { transport ->
+                transport.failure(transports)?.let { failure -> literal(transport.name) to reference(queueId(failure)) }
+            }
+        val fallbackArg = default?.let { reference(ServiceId("messenger.bus.${it.name}")) } ?: NULL
+
+        service<RoutableMessageBus>(ServiceId("messenger.routableBus")) {
+            argument("buses", Argument.Dictionary(busEntries))
+            argument("fallback", fallbackArg)
+        }
+        service<MessengerCatalog>(ServiceId("messenger.catalog")) {
+            argument("buses", Argument.Dictionary(busEntries))
+            argument("transports", Argument.Dictionary(transportEntries))
+            argument("failureTransports", Argument.Dictionary(failureEntries))
+            argument("defaultBus", fallbackArg)
         }
     }
 

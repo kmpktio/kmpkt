@@ -21,6 +21,8 @@
   `Transport`, routing, and retries.
 - [`kmpkt-messenger-outbox-relay`](../kmpkt-messenger-outbox-relay/README.md) — `OutboxRelayMiddleware`
   for forwarding envelopes received from a durable outbox `Transport` to a target `Transport`.
+- [`kmpkt-messenger-clikt`](../kmpkt-messenger-clikt/README.md) — `messenger:consume` Clikt CLI
+  command for prioritized multi-transport consumption and `BusNameStamp` routing.
 - [`kmpkt-command-bus`](../kmpkt-command-bus/README.md) — `Command`, `CommandHandler`, and
   `CommandBus` (`HandlerPolicy.SINGLE`).
 - [`kmpkt-event-bus`](../kmpkt-event-bus/README.md) — `Event`, `EventHandler`, and `EventBus`

@@ -78,10 +78,9 @@ class MessengerExampleConfiguration : Configuration<MessengerApp> {
 
         // 5. Background worker for "async-jobs": WorkerComponent automatically wraps this Work into a ManagedWorker.
         service<TransportWork>(ServiceId("async-jobs")) {
-            argument("transport", byKey<Transport>("async-jobs"))
-            argument("transportName", literal("async-jobs"))
+            argument("transports", Argument.Dictionary(listOf(literal("async-jobs") to byKey<Transport>("async-jobs"))))
             argument("messageBus", byKey<MessageBus>("commands"))
-            argument("failureTransport", byKey<Transport>("dead-letter"))
+            argument("defaultFailureTransport", byKey<Transport>("dead-letter"))
         }
 
         // 6. Start background workers first (priority 100), then run the demo client interaction (priority 0).

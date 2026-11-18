@@ -30,9 +30,12 @@ with no event-sourcing or DI-framework knowledge of any kind.
   `RedeliveryStamp` and `DelayStamp` according to the configured `RetryStrategy`.
 - `defaultMiddleware { ... }` (DI): selectively enables/disables built-in middlewares (`busName`,
   `send`, `failedMessageProcessing`, `retry`, `handle`) or disables all with `none()`.
-- `Worker` (`TransportWork`): polls a transport, dispatches what it finds onto the bus, acks
-  successes, and rejects (or moves to `failureTransport` when retries are exhausted) failures.
-  Concrete queued transports (e.g. an in-memory channel) live in their own, optional modules.
+- `RoutableMessageBus` / `MessengerCatalog`: routes envelopes to their originating bus using
+  `BusNameStamp` (with optional fallback), enabling multi-bus transport consumption.
+- `Worker` (`TransportWork`): polls one or more prioritized transports in order, dispatches what
+  it finds onto the bus, acks successes, and rejects (or moves to `failureTransport` when retries
+  are exhausted) failures. Concrete queued transports (e.g. an in-memory channel) live in their
+  own, optional modules.
 
 ## Usage
 
