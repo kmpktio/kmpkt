@@ -1,5 +1,7 @@
 # KmpKt Documentation
 
+> **Active Development:** KmpKt is in active early development (pre-1.0); APIs, module boundaries, and configuration DSLs may still change between releases.
+
 Welcome to KmpKt — compact CQRS, event sourcing, and typed messaging for Kotlin, built on
 compile-time dependency injection.
 
@@ -7,7 +9,7 @@ compile-time dependency injection.
 
 1. [Getting Started](getting-started.md) — Adding KmpKt to a Gradle project, setting up
    `io.kmpkt.di`, and wiring your first `KmpKtApplication`.
-2. [Module Guide](modules.md) — What each of the 20 modules does and when to include it.
+2. [Module Guide](modules.md) — What each module does and when to include it.
 3. [CQRS & Event Sourcing](cqrs-and-event-sourcing.md) — How commands, queries, events,
    aggregates, policies, and projections fit together, and when to use CQRS with or without
    event sourcing.
