@@ -23,6 +23,9 @@ with no event-sourcing or DI-framework knowledge of any kind.
   on it, so its `receive`/`ack`/`reject` throw rather than quietly doing nothing.
 - `AddBusNameStampMiddleware`: stamps envelopes with `BusNameStamp` on their entry bus so workers
   and replays know which bus originally dispatched them.
+- `DispatchAfterCurrentBusMiddleware`: defers inner `dispatch()` calls stamped with
+  `DispatchAfterCurrentBusStamp` until the enclosing outer bus dispatch completes normally
+  (discarding them if the outer dispatch throws).
 - `FailedMessageProcessingMiddleware`: restores the original `ReceivedStamp` from
   `SentToFailureTransportStamp` when re-consuming messages from a failure transport.
 - `RetryMiddleware`: wraps downstream middleware and handler execution for messages received from
