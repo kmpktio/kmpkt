@@ -3,6 +3,8 @@ package io.kmpkt.persistence.jdbc
 import io.kmpkt.persistence.QueuedItem
 import io.kmpkt.persistence.WorkQueue
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.withContext
 import java.time.Instant
 import javax.sql.DataSource
@@ -11,6 +13,7 @@ internal class JdbcWorkQueue(
     private val dataSource: DataSource,
     private val queue: String,
     private val schemaFuse: Fuse = Fuse(),
+    private val pageSize: Int = 100,
 ) : WorkQueue {
     override suspend fun setup() {
         schemaFuse.runOnce {
@@ -134,4 +137,92 @@ internal class JdbcWorkQueue(
                 }
         }
     }
+
+    override fun list(): Flow<QueuedItem> =
+        flow {
+            var cursorAvailableAt: Instant? = null
+            var cursorId: String? = null
+            while (true) {
+                val page = listPage(cursorAvailableAt, cursorId)
+                if (page.isEmpty()) break
+                for (item in page) {
+                    emit(item)
+                }
+                if (page.size < pageSize) break
+                val last = page.last()
+                cursorAvailableAt = last.availableAt
+                cursorId = last.id
+            }
+        }
+
+    private suspend fun listPage(
+        afterAvailableAt: Instant?,
+        afterId: String?,
+    ): List<QueuedItem> =
+        dataSource.inTransaction { connection ->
+            val sql =
+                if (afterAvailableAt == null) {
+                    "SELECT id, payload, available_at, attempts FROM work_queue" +
+                        " WHERE queue = ? AND status = 'PENDING' ORDER BY available_at, id LIMIT ?"
+                } else {
+                    "SELECT id, payload, available_at, attempts FROM work_queue" +
+                        " WHERE queue = ? AND status = 'PENDING'" +
+                        " AND (available_at > ? OR (available_at = ? AND id > ?))" +
+                        " ORDER BY available_at, id LIMIT ?"
+                }
+            connection.prepareStatement(sql).use { statement ->
+                var index = 1
+                statement.setString(index++, queue)
+                if (afterAvailableAt != null) {
+                    val ts = afterAvailableAt.toString()
+                    statement.setString(index++, ts)
+                    statement.setString(index++, ts)
+                    statement.setString(index++, afterId)
+                }
+                statement.setInt(index, pageSize)
+                statement.executeQuery().use { rows ->
+                    buildList {
+                        while (rows.next()) {
+                            add(
+                                QueuedItem(
+                                    id = rows.getString("id"),
+                                    payload = rows.getString("payload"),
+                                    availableAt = Instant.parse(rows.getString("available_at")),
+                                    attempts = rows.getInt("attempts"),
+                                ),
+                            )
+                        }
+                    }
+                }
+            }
+        }
+
+    override suspend fun find(id: String): QueuedItem? =
+        dataSource.inTransaction { connection ->
+            connection
+                .prepareStatement(
+                    "SELECT id, payload, available_at, attempts FROM work_queue WHERE queue = ? AND id = ? AND status = 'PENDING'",
+                ).use { statement ->
+                    statement.setString(1, queue)
+                    statement.setString(2, id)
+                    statement.executeQuery().use { rows ->
+                        if (!rows.next()) return@inTransaction null
+                        QueuedItem(
+                            id = rows.getString("id"),
+                            payload = rows.getString("payload"),
+                            availableAt = Instant.parse(rows.getString("available_at")),
+                            attempts = rows.getInt("attempts"),
+                        )
+                    }
+                }
+        }
+
+    override suspend fun remove(id: String): Boolean =
+        dataSource.inTransaction { connection ->
+            connection.prepareStatement("DELETE FROM work_queue WHERE queue = ? AND id = ?").use { statement ->
+                statement.setString(1, queue)
+                statement.setString(2, id)
+                statement.executeUpdate() > 0
+            }
+        }
 }
