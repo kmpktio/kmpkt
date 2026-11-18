@@ -1,45 +1,109 @@
-# Todo List — CQRS + Event Sourcing
+# todo-event-sourced
 
-The same Todo domain as [`todo-cqrs`](../todo-cqrs), rebuilt on event-sourced aggregates,
-read-model projections, and reactive policies.
+An event-sourced CQRS todo application built with `kmpkt-aggregate`, `kmpkt-event-store`, `kmpkt-policy`, `kmpkt-projection`, `kmpkt-serialization-kotlinx`, and `kmpkt-di`. Instead of overwriting rows in place, every state change is recorded as an immutable domain event that drives both reactive policies and read-model projections.
 
-## Domain
+## Flow
 
-A todo list where every task is an event-sourced `TodoItem` aggregate. Adding a task whose title
-ends with `!` automatically pins it as urgent, while read queries consume a projected `TodoRow`
-view.
+```mermaid
+flowchart TD
+    Runner["DemoInteractionRunner"] -->|AddTodo / CompleteTodo / PinTodo| CB["CommandBus"]
+    Runner -->|ListTodos| QB["QueryBus"]
+    CB --> CmdH["Command Handlers"]
+    CmdH --> Repo["AggregateRepository&lt;TodoItem&gt;"]
+    Repo --> ES["EventStore"]
+    ES --> PolT["PolicyTransport"]
+    ES --> ProjT["ProjectionTransport&lt;TodoRow&gt;"]
+    PolT --> Pol["PinUrgentTodoPolicy"]
+    Pol -->|PinTodo if title ends with !| MB["MessageBus('command')"]
+    MB --> CmdH
+    ProjT --> Projs["TodoRow Projectors"]
+    Projs --> Store["InMemoryProjectionStore&lt;TodoRow&gt;"]
+    QB --> ListH["ListTodosHandler"]
+    ListH --> Store
+```
 
-## What this example shows
+## How It Works
 
-**Event-sourced state.** `TodoItem` extends `BaseAggregateRoot` and records `TodoAdded`,
-`TodoCompleted`, and `TodoPinned` events instead of mutating rows directly. Events are
-serialized with `KotlinxEventSerializer`.
+### 1. Model State as an Event-Sourced Aggregate
 
-**Read models via projectors.** `WhenTodoAddedProjectRow`, `WhenTodoCompletedProjectRow`, and
-`WhenTodoPinnedProjectRow` turn domain events into `TodoRow` entries stored in
-`InMemoryProjectionStore`. Queries read from `ProjectionView<TodoRow>` without touching the
-aggregate.
+`TodoItem` extends `BaseAggregateRoot<TodoItem>`. Calling `create`, `complete`, or `pin` does not mutate fields directly; it records a `TodoEvent` (`TodoAdded`, `TodoCompleted`, or `TodoPinned`), and `updateState` replays those events to rebuild state from history.
 
-**Reactive policies.** When a todo title ends with `!`, `PinUrgentTodoPolicy` reacts to
-`TodoAdded` and dispatches a follow-up `PinTodo` command.
+```kotlin
+class TodoItem internal constructor(
+    id: AggregateId<TodoItem>,
+) : BaseAggregateRoot<TodoItem>(id) {
+    fun complete(clock: Clock = Clock.systemUTC()) {
+        if (!completed) {
+            recordThat(TodoCompleted(id, version + 1, clock.instant()))
+        }
+    }
 
-**Explicit bus wiring & demo entry point.** [TodoEventSourcedConfiguration](core/src/di/kotlin/io/kmpkt/example/todo/es/di/TodoEventSourcedConfiguration.kt)
-passes the `"command"` bus to [`DemoInteractionRunner`](core/src/main/kotlin/io/kmpkt/example/todo/es/inbound/runner/DemoInteractionRunner.kt)
-in code — no `@Named` annotation needed. `DemoInteractionRunner` acts as the simulated client
-interaction and transport driver for the runnable example.
+    override fun updateState(event: DomainEvent<TodoItem>) {
+        when (event) {
+            is TodoAdded -> title = event.title
+            is TodoCompleted -> completed = true
+            is TodoPinned -> pinned = true
+            else -> error("Unsupported event: ${event::class}")
+        }
+    }
+}
+```
 
-## Project layout
+### 2. React to Events with Policies and Projections
 
-| Module | Contents |
+Once `AggregateRepository` persists events to `EventStore`, two independent consumers react to the stream:
+
+- **Policies** turn domain events into follow-up commands. `PinUrgentTodoPolicy` watches `TodoAdded` and emits `PinTodo` whenever a title ends with `"!"`.
+- **Projectors** maintain the queryable read model. `WhenTodoAddedProjectRow`, `WhenTodoCompletedProjectRow`, and `WhenTodoPinnedProjectRow` fold events into `TodoRow` records stored in `InMemoryProjectionStore`.
+
+```kotlin
+class PinUrgentTodoPolicy : Policy<TodoAdded> {
+    override fun decide(event: TodoAdded): List<Command> =
+        if (event.title.endsWith("!")) listOf(PinTodo(event.aggregate)) else emptyList()
+}
+```
+
+### 3. Configure Aggregates, Projections, and Policies
+
+`TodoEventSourcedConfiguration` registers the `todo_item` aggregate stream, the `todos` projection stream, and the policy engine, then provides the kotlinx event serializer, `TodoItemFactory`, and `todoRowStore`, and discovers all handlers, policies, and projectors.
+
+```kotlin
+aggregate {
+    aggregate<TodoItem>("todo_item")
+}
+projection {
+    projection<TodoRow>("todos")
+}
+policy()
+
+factory(::todoEventSerializer)
+service<TodoItemFactory> { bind<AggregateFactory<TodoItem>>() }
+factory(::todoRowStore) {
+    bind<ProjectionStore<TodoRow>>()
+    bind<ProjectionView<TodoRow>>()
+}
+```
+
+### 4. Drain Queues and Query the Read Model
+
+`DemoInteractionRunner` dispatches `AddTodo` for `"Pay rent!"` and `"Buy milk"`, completes `"Buy milk"`, and then drains `PolicyTransport` followed by `ProjectionTransport<TodoRow>` through the `"command"` `MessageBus`. Querying `ListTodos` confirms that `"Pay rent!"` was automatically pinned by the policy while `"Buy milk"` is marked completed.
+
+## Project Layout
+
+| File | Role |
 | --- | --- |
-| `core` | Aggregate, events, projectors, policy, [`DemoInteractionRunner`](core/src/main/kotlin/io/kmpkt/example/todo/es/inbound/runner/DemoInteractionRunner.kt), and configuration |
-| `app` | [Main.kt](app/src/main/kotlin/io/kmpkt/example/todo/es/Main.kt) and [TodoAppTest.kt](app/src/test/kotlin/io/kmpkt/example/todo/es/TodoAppTest.kt) |
+| [`TodoItem.kt`](core/src/main/kotlin/io/kmpkt/example/todo/es/domain/aggregate/TodoItem.kt), [`TodoItemFactory.kt`](core/src/main/kotlin/io/kmpkt/example/todo/es/domain/aggregate/TodoItemFactory.kt) | Event-sourced aggregate and hydration factory |
+| [`TodoEvent.kt`](core/src/main/kotlin/io/kmpkt/example/todo/es/domain/event/TodoEvent.kt) | Sealed domain event hierarchy (`TodoAdded`, `TodoCompleted`, `TodoPinned`) |
+| [`AddTodo.kt`](core/src/main/kotlin/io/kmpkt/example/todo/es/domain/command/AddTodo.kt), [`CompleteTodo.kt`](core/src/main/kotlin/io/kmpkt/example/todo/es/domain/command/CompleteTodo.kt), [`PinTodo.kt`](core/src/main/kotlin/io/kmpkt/example/todo/es/domain/command/PinTodo.kt) | Write commands and their handlers in `application/handler/` |
+| [`PinUrgentTodoPolicy.kt`](core/src/main/kotlin/io/kmpkt/example/todo/es/application/policy/PinUrgentTodoPolicy.kt) | Reactive policy that auto-pins urgent todos |
+| [`TodoRow.kt`](core/src/main/kotlin/io/kmpkt/example/todo/es/application/projection/TodoRow.kt), [`WhenTodoAddedProjectRow.kt`](core/src/main/kotlin/io/kmpkt/example/todo/es/application/projection/WhenTodoAddedProjectRow.kt) | Read-model row and event projectors |
+| [`TodoEventSerializer.kt`](core/src/main/kotlin/io/kmpkt/example/todo/es/outbound/serialization/TodoEventSerializer.kt), [`TodoRowStore.kt`](core/src/main/kotlin/io/kmpkt/example/todo/es/outbound/persistence/TodoRowStore.kt) | Outbound kotlinx serializer and in-memory projection store |
+| [`TodoEventSourcedConfiguration.kt`](core/src/di/kotlin/io/kmpkt/example/todo/es/di/TodoEventSourcedConfiguration.kt) | Compile-time DI configuration |
+| [`DemoInteractionRunner.kt`](core/src/main/kotlin/io/kmpkt/example/todo/es/inbound/runner/DemoInteractionRunner.kt) | End-to-end demo runner |
+| [`Main.kt`](app/src/main/kotlin/io/kmpkt/example/todo/es/Main.kt), [`TodoAppTest.kt`](app/src/test/kotlin/io/kmpkt/example/todo/es/TodoAppTest.kt) | Application entrypoint and test |
 
-## Run it
+## Running & Testing
 
 ```bash
 ./gradlew :examples:todo-event-sourced:app:test
 ```
-
-Looking for the simpler CRUD-style version without event sourcing?
-See [Todo List — CQRS without Event Sourcing](../todo-cqrs).

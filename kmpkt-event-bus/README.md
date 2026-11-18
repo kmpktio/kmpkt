@@ -1,45 +1,113 @@
-# kmpkt-event
+# kmpkt-event-bus
 
-`Event`, its handler, and the bus that publishes one to the other. The counterpart to
-[`kmpkt-command-bus`](../kmpkt-command-bus): a command asks for something and has exactly one handler, an event
-reports something and has as many handlers as care.
+Fan-out event publishing facade over KmpKt Messenger. Events are dispatched onto a bus with `HandlerPolicy.MULTIPLE`, allowing zero or more handlers per event type.
 
-This module exists so that **CQRS without event sourcing works**. Running a classic event bus without an event
-store is a legitimate way to use the family, so the two worlds are layered rather than merged:
-[`kmpkt-aggregate`](../kmpkt-aggregate) adds `DomainEvent : Event` on top of this, with the aggregate,
-version and time that an append-only log needs.
+## Building Blocks
 
-## Scope
+| Symbol | Purpose |
+| --- | --- |
+| `Event` | Marker interface for domain or application facts |
+| `EventHandler` | Handler invoked when a matching `Event` is published |
+| `EventBus` | Facade wrapping `MessageBus` to publish events |
+| `EventComponent` | DI component that configures the `"event"` bus and registers `EventBus` |
+| `eventBus` | `MessengerOptions` DSL helper for configuring the `"event"` bus |
 
-- `Event`: the marker for something that happened. It is a [`kmpkt-messenger`](../kmpkt-messenger)
-  `Message`, which is what lets it travel over a bus.
-- `EventHandler<E>`: reacts to one. Contravariant, so a handler written against a supertype serves its
-  subtypes. Unconstrained on purpose - a handler may do whatever it likes. It is a `MessageHandler<E, Unit>`
-  for its event, so a bus takes it as it is.
-- `EventBus`: publishes onto a `MessageBus`, so events get that bus's middleware, routing and retries.
+## Installation
+
+Add the dependency in `build.gradle.kts` (with `id("io.kmpkt.di")` applied, `EventComponent` is discovered automatically):
+
+```kotlin
+dependencies {
+    implementation("io.kmpkt:kmpkt-event-bus:0.1.0")
+}
+```
+
+## DI Setup
+
+Discover your event handlers and customize the `"event"` bus in `src/di/kotlin`:
+
+```kotlin
+// src/di/kotlin/AppConfiguration.kt
+import io.kmpkt.di.compiler.Configuration
+import io.kmpkt.di.compiler.ContainerBuilder
+import io.kmpkt.event.EventHandler
+import io.kmpkt.event.di.eventBus
+import io.kmpkt.messenger.di.messenger
+import io.kmpkt.messenger.logging.LoggingMiddleware
+
+class AppConfiguration : Configuration<MyApp> {
+    override fun ContainerBuilder.configure() {
+        discover("com.example.app") {
+            services<EventHandler<*>>()
+        }
+
+        messenger {
+            eventBus {
+                middleware<LoggingMiddleware>()
+            }
+        }
+    }
+}
+```
 
 ## Usage
 
+Define events and handlers in `src/main/kotlin`, then inject and invoke `EventBus`:
+
 ```kotlin
+// src/main/kotlin/ItemChecked.kt
+import io.kmpkt.event.Event
+import io.kmpkt.event.EventBus
+import io.kmpkt.event.EventHandler
+
 data class ItemChecked(val name: String) : Event
 
-class NotifyOnItemChecked(...) : EventHandler<ItemChecked> {
-    override suspend fun handle(event: ItemChecked) { ... }
+class NotifyOnItemChecked : EventHandler<ItemChecked> {
+    override suspend fun handle(event: ItemChecked) {
+        // React to the event
+    }
 }
 
-// wherever the bus is built - it has to allow HandlerPolicy.MULTIPLE
-bus("event") { handler(NotifyOnItemChecked(...)) }
-
-EventBus(messageBus).publish(ItemChecked("Milch"))
+class CheckoutService(private val eventBus: EventBus) {
+    suspend fun complete(item: String) {
+        eventBus.publish(ItemChecked(item))
+    }
+}
 ```
 
-## Which to use under event sourcing
+## Extending
 
-With an event store, **nothing publishes**: the store is the append-only log, and a
-[`Policy`](../kmpkt-policy) (event in, commands out) or a [`Projector`](../kmpkt-projection) (event in,
-projection changes out) reads events back out of it rather than being handed them. Both are constrained
-versions of `EventHandler`, and the constraint is the point - a side effect expressed as a command is
-individually retryable, replayable and testable without an event store.
+### Async event routing
 
-A plain `EventHandler` alongside all that is still allowed, and an audit log or an outgoing webhook is a
-reasonable reason to want one. It is a choice, not a mistake.
+Route specific event types to a queued transport inside `eventBus` in `src/di/kotlin`:
+
+```kotlin
+messenger {
+    val async = transport<InMemoryTransport>("async")
+    eventBus {
+        route<ItemChecked>(async)
+    }
+}
+```
+
+### Handler ordering
+
+Tag handlers with `MessageHandlerTag` targeting `"event"` and set a priority (highest runs first):
+
+```kotlin
+service<AuditItemCheckedHandler> {
+    tag(MessageHandlerTag(bus = "event", priority = 100))
+}
+```
+
+### Subtype listening
+
+Because `EventHandler` is contravariant, a handler registered for a base `Event` interface receives subtypes dispatched as that base:
+
+```kotlin
+class AllEventsAuditHandler : EventHandler<Event> {
+    override suspend fun handle(event: Event) {
+        println("Observed ${event::class.simpleName}")
+    }
+}
+```

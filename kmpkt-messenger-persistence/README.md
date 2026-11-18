@@ -1,10 +1,92 @@
 # kmpkt-messenger-persistence
 
-Persistent [`Transport`](../kmpkt-messenger) and [`Middleware`](../kmpkt-messenger) backed by [`kmpkt-persistence`](../kmpkt-persistence).
+Durable transport, transactional middleware, and distributed locking adapters connecting KmpKt Messenger to KmpKt Persistence.
 
-## Scope
+## Building Blocks
 
-- `EnvelopeSerializer`: port for turning an `Envelope` into a `String` and back without coupling to a serialization library.
-- `PersistentTransport`: `SetupableTransport` backed by a named `WorkQueue`, supporting `DelayStamp`, `ack`, `reject`, and `setup()` (via `WorkQueue.setup()`).
-- `TransactionMiddleware`: `Middleware` that wraps each dispatched message in `Persistence.inTransaction`.
-- `PersistenceWorkLock`: `WorkLock` adapter delegating to `Persistence.underLock` for `LockedWork`.
+| Symbol | Purpose |
+| --- | --- |
+| `PersistentTransport` | `SetupableTransport` and `ListableTransport` backed by a `WorkQueue` |
+| `TransactionMiddleware` | Middleware wrapping downstream execution in `Persistence.inTransaction` |
+| `EnvelopeSerializer` | Serialization port decoupling `PersistentTransport` from concrete formats |
+| `PersistentQueueItemStamp` | Stamp tracking the `WorkQueue` item ID for `ack` and `reject` |
+| `PersistenceWorkLock` | `WorkLock` implementation delegating to `Persistence.underLock` |
+| `MessengerPersistenceComponent` | DI component registering `TransactionMiddleware`, `PersistenceWorkLock`, and transport wiring |
+| `WirePersistentTransportsPass` | `BuilderPass` provisioning a dedicated `WorkQueue` for each `PersistentTransport` |
+
+## Installation
+
+Add the dependency in `build.gradle.kts` (with `id("io.kmpkt.di")` applied, `MessengerPersistenceComponent` is discovered automatically):
+
+```kotlin
+dependencies {
+    implementation("io.kmpkt:kmpkt-messenger-persistence:0.1.0")
+}
+```
+
+## DI Setup
+
+Bind an `EnvelopeSerializer` implementation, declare a `PersistentTransport`, and attach `TransactionMiddleware` in `src/di/kotlin`:
+
+```kotlin
+// src/di/kotlin/AppConfiguration.kt
+import io.kmpkt.di.compiler.Configuration
+import io.kmpkt.di.compiler.ContainerBuilder
+import io.kmpkt.messenger.di.messenger
+import io.kmpkt.messenger.persistence.middleware.TransactionMiddleware
+import io.kmpkt.messenger.persistence.serialization.EnvelopeSerializer
+import io.kmpkt.messenger.persistence.transport.PersistentTransport
+
+class AppConfiguration : Configuration<MyApp> {
+    override fun ContainerBuilder.configure() {
+        service<MyEnvelopeSerializer> { bind<EnvelopeSerializer>() }
+
+        messenger {
+            val outbox = transport<PersistentTransport>("outbox")
+            bus("command") {
+                middleware<TransactionMiddleware>()
+                defaultTransport = outbox
+            }
+        }
+    }
+}
+```
+
+## Usage
+
+Implement `EnvelopeSerializer` in `src/main/kotlin` and dispatch through your configured bus; `PersistentTransport` enqueues and acknowledges envelopes inside `WorkQueue` transactions:
+
+```kotlin
+// src/main/kotlin/MyEnvelopeSerializer.kt
+import io.kmpkt.messenger.message.Envelope
+import io.kmpkt.messenger.persistence.serialization.EnvelopeSerializer
+
+class MyEnvelopeSerializer : EnvelopeSerializer {
+    override fun serialize(envelope: Envelope): String = TODO("Encode envelope")
+    override fun deserialize(payload: String): Envelope = TODO("Decode envelope")
+}
+```
+
+Provision the underlying queue tables via `SetupTransportsCommand` (`messenger:setup-transports`) or `PersistentTransport.setup()`.
+
+## Extending
+
+### Custom `WorkQueue`
+
+Bind a `WorkQueue` under the transport's qualifier name in `src/di/kotlin` to override automatic queue provisioning:
+
+```kotlin
+service<CustomWorkQueue>("outbox") {
+    bind<WorkQueue>("outbox")
+}
+```
+
+### Leader-locked consumption
+
+Inject `WorkLock` (automatically bound to `PersistenceWorkLock`) to wrap polling `Work` in `LockedWork`:
+
+```kotlin
+class OutboxConsumer(lock: WorkLock, work: TransportWork) {
+    val lockedWork = LockedWork("outbox-lock", lock, work)
+}
+```

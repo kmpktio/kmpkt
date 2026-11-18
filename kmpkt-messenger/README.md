@@ -1,65 +1,220 @@
 # kmpkt-messenger
 
-A message bus for Kotlin/JVM: commands and events go through a middleware pipeline to their handlers, with
-optional routing to a named `Transport` instead of handling inline (`Envelope`/`Stamp`/`MessageBus`/`Transport`/`Worker`),
-with no event-sourcing or DI-framework knowledge of any kind.
+Core message bus, envelope and stamp model, middleware pipeline, transport routing, retry handling, and consumer `Work` for KmpKt applications. Designed to be used directly or wired at compile time via its `di` source set.
 
-## Scope
+## Building Blocks
 
-- `Message`/`MessageHandler<M, R>`: a dispatchable message and the handler(s) for its type.
-- `Envelope`: a message plus whatever `Stamp`s got attached to it along the way (who handled it, where it was
-  routed, when it was sent, ...).
-- `MessageBus`/`DefaultMessageBus`: runs an envelope through a list of `Middleware`, in order.
-  `HandleMessageMiddleware` is the one that actually invokes the handler(s) - it belongs last in the chain.
-  `HandlerPolicy.SINGLE` (exactly one handler, e.g. a command bus) or `MULTIPLE` (zero or more, e.g. an event
-  bus) controls how many handlers a message may have.
-- `Transport`/`SyncTransport`: a transport is a delivery mechanism for envelopes.
-  `TransportRegistry`/`DefaultTransportRegistry` statically maps a message type to a transport name;
-  `SendMessageMiddleware` does the routing, consulting a per-envelope `RouteStamp` override first. A message
-  with no route is handled inline on the bus it was dispatched to.
-  `SyncTransport` marks a message as received and hands it straight back to the bus
-  instead of queueing it - which is what makes inline handling a routing *decision*, and so the only way a
-  `RouteStamp` can override a routed message type back to inline: `RouteStamp.Sync`. Nothing is ever queued
-  on it, so its `receive`/`ack`/`reject` throw rather than quietly doing nothing.
-  Transports that own external or durable infrastructure can implement `SetupableTransport` (`setup()`)
-  so `messenger:setup-transports` can provision them idempotently ahead of consumption.
-- `AddBusNameStampMiddleware`: stamps envelopes with `BusNameStamp` on their entry bus so workers
-  and replays know which bus originally dispatched them.
-- `DispatchAfterCurrentBusMiddleware`: defers inner `dispatch()` calls stamped with
-  `DispatchAfterCurrentBusStamp` until the enclosing outer bus dispatch completes normally
-  (discarding them if the outer dispatch throws).
-- `FailedMessageProcessingMiddleware`: restores the original `ReceivedStamp` from
-  `SentToFailureTransportStamp` when re-consuming messages from a failure transport.
-- `RetryMiddleware`: wraps downstream middleware and handler execution for messages received from
-  a queued transport (`ReceivedStamp`) and re-sends failed envelopes to their source transport with
-  `RedeliveryStamp` and `DelayStamp` according to the configured `RetryStrategy`.
-- `defaultMiddleware { ... }` (DI): selectively enables/disables built-in middlewares (`busName`,
-  `send`, `failedMessageProcessing`, `retry`, `handle`) or disables all with `none()`.
-- `RoutableMessageBus` / `MessengerCatalog`: routes envelopes to their originating bus using
-  `BusNameStamp` (with optional fallback), enabling multi-bus transport consumption.
-- `Worker` (`TransportWork`): polls one or more prioritized transports in order, dispatches what
-  it finds onto the bus, acks successes, and rejects (or moves to `failureTransport` when retries
-  are exhausted) failures. Concrete queued transports (e.g. an in-memory channel) live in their
-  own, optional modules.
+### Buses & Catalog
+
+| Symbol | Purpose |
+| --- | --- |
+| `MessageBus` | Core bus interface for dispatching, sending, and asking messages |
+| `DefaultMessageBus` | Executes an ordered `Middleware` chain |
+| `RoutableMessageBus` | Routes envelopes to the bus named by `BusNameStamp` |
+| `MessengerCatalog` | Holds registered buses, transports, failure transports, and the default bus |
+
+### Messages, Handlers & Exceptions
+
+| Symbol | Purpose |
+| --- | --- |
+| `Message`, `MessageHandler`, `Envelope`, `Stamp` | Core message, handler, envelope wrapper, and metadata marker types |
+| `HandlerPolicy`, `HandlerRegistry`, `DefaultHandlerRegistry` | Handler lookup and single-vs-multiple invocation policies |
+| `HandlerFailedException`, `NoHandlerForMessageException` | Exceptions thrown on handler failure or missing registration |
+
+### Middlewares
+
+| Symbol | Purpose |
+| --- | --- |
+| `Middleware`, `MiddlewareChain` | Intercepts envelope dispatch before and after downstream execution |
+| `AddBusNameStampMiddleware` | Attaches `BusNameStamp` if absent |
+| `SendMessageMiddleware` | Routes envelopes via `RouteStamp` or `TransportRegistry` when not already received |
+| `FailedMessageProcessingMiddleware` | Restores `ReceivedStamp` when re-consuming from a failure transport |
+| `RetryMiddleware` | Re-queues failed envelopes with `RedeliveryStamp` and `DelayStamp` |
+| `HandleMessageMiddleware` | Invokes matching handlers under `HandlerPolicy` and attaches `HandledStamp` |
+| `DispatchAfterCurrentBusMiddleware` | Defers dispatches carrying `DispatchAfterCurrentBusStamp` until the outer bus completes |
+| `RateLimitedMiddleware` | Acquires permits from named `RateLimiter` instances for `RateLimitedStamp` |
+| `LoggingMiddleware` | Logs dispatch entry, completion, and failures via SLF4J |
+
+### Stamps
+
+| Symbol | Purpose |
+| --- | --- |
+| `AsyncStamp`, `BusNameStamp`, `DelayStamp`, `DispatchAfterCurrentBusStamp`, `DispatchedStamp`, `RateLimitedStamp`, `ReceivedStamp`, `RedeliveryStamp`, `SentToFailureTransportStamp` | Built-in routing, scheduling, retry, and lifecycle metadata |
+| `HandledStamp` | Records handler execution and return values |
+| `RouteStamp`, `SentStamp` | Records explicit transport routing and delivery |
+
+### Transports, Retries & Worker
+
+| Symbol | Purpose |
+| --- | --- |
+| `Transport`, `SyncTransport`, `InMemoryTransport`, `ListableTransport`, `QueuedEnvelope`, `SetupableTransport`, `TransportFactory` | Transport abstractions and built-in sync/in-memory implementations |
+| `TransportRegistry`, `DefaultTransportRegistry` | Maps message types to target transports |
+| `RetryStrategy`, `MultiplierRetryStrategy`, `RetryDecider`, `RecoverableException`, `UnrecoverableException`, `RetryScheduledException` | Retry policies, backoff strategies, and exception classification |
+| `TransportWork` | `Work` implementation polling prioritized transports onto `MessageBus` |
+
+### DI Configuration
+
+| Symbol | Purpose |
+| --- | --- |
+| `MessengerComponent`, `messenger`, `MessengerOptions`, `BusRef`, `TransportRef`, `TransportOptions`, `StrategyOptions`, `BusOptions`, `DefaultMiddlewareOptions`, `MessageHandlerTag`, `HandlerRegistryTag` | Compile-time DI component, DSL configuration, and handler tags |
+| `RegisterMessageHandlersPass` | `BuilderPass` that wires tagged handlers into each bus's `HandlerRegistry` |
+
+## Installation
+
+Add the dependency in `build.gradle.kts` (with `id("io.kmpkt.di")` applied, `MessengerComponent` is discovered automatically):
+
+```kotlin
+dependencies {
+    implementation("io.kmpkt:kmpkt-messenger:0.1.0")
+}
+```
+
+## DI Setup
+
+Configure transports, retry strategies, routing, and buses in `src/di/kotlin`:
+
+```kotlin
+// src/di/kotlin/AppConfiguration.kt
+import io.kmpkt.di.compiler.Configuration
+import io.kmpkt.di.compiler.ContainerBuilder
+import io.kmpkt.messenger.di.delay
+import io.kmpkt.messenger.di.maxRetries
+import io.kmpkt.messenger.di.messenger
+import io.kmpkt.messenger.logging.LoggingMiddleware
+import io.kmpkt.messenger.message.MessageHandler
+import io.kmpkt.messenger.retry.MultiplierRetryStrategy
+import io.kmpkt.messenger.transport.InMemoryTransport
+import io.kmpkt.messenger.transport.SyncTransport
+import kotlin.time.Duration.Companion.seconds
+
+class AppConfiguration : Configuration<MyApp> {
+    override fun ContainerBuilder.configure() {
+        discover("com.example.app") {
+            services<MessageHandler<*, *>>()
+        }
+
+        messenger {
+            val failed = transport<InMemoryTransport>("failed")
+            val async = transport<InMemoryTransport>("async") {
+                retry<MultiplierRetryStrategy> {
+                    maxRetries = 3
+                    delay = 1.seconds
+                }
+                failureTransport = failed
+            }
+            val sync = transport<SyncTransport>("sync") {
+                failureTransport = failed
+            }
+
+            defaultBus = bus("default") {
+                defaultTransport = sync
+                route<Greet>(async)
+                middleware<LoggingMiddleware>()
+            }
+        }
+    }
+}
+```
 
 ## Usage
 
+Define messages and handlers in `src/main/kotlin`, then inject and invoke `MessageBus`:
+
 ```kotlin
-class Greet : Message
+// src/main/kotlin/Greet.kt
+import io.kmpkt.messenger.bus.MessageBus
+import io.kmpkt.messenger.message.Message
+import io.kmpkt.messenger.message.MessageHandler
+
+data class Greet(val name: String) : Message
 
 class GreetHandler : MessageHandler<Greet, Unit> {
-    override suspend fun invoke(message: Greet) = println("hello")
+    override suspend fun invoke(message: Greet) {
+        println("Hello, ${message.name}")
+    }
 }
 
-val registry = DefaultHandlerRegistry().apply { register(Greet::class, GreetHandler()) }
-val bus =
-    DefaultMessageBus(
-        middleware = listOf(HandleMessageMiddleware(registry, HandlerPolicy.SINGLE, Clock.systemUTC())),
-        handlerRegistry = registry,
-    )
-
-bus.dispatch(Greet())
+class GreetingService(private val bus: MessageBus) {
+    suspend fun greet(name: String) {
+        bus.send(Greet(name))
+    }
+}
 ```
 
-DI wiring (discovering handlers, building the middleware chain, etc.) is handled by the optional `di` source set -
-not needed to use this module directly.
+For standalone usage without DI, wire `DefaultHandlerRegistry` and `DefaultMessageBus` directly:
+
+```kotlin
+val registry = DefaultHandlerRegistry().apply {
+    register(Greet::class, GreetHandler())
+}
+val bus = DefaultMessageBus(
+    middleware = listOf(HandleMessageMiddleware(registry, HandlerPolicy.SINGLE, Clock.systemUTC())),
+    handlerRegistry = registry,
+)
+bus.send(Greet("world"))
+```
+
+## Extending
+
+### Custom `Middleware`
+
+Implement `Middleware` and register it on a bus with `middleware<TimingMiddleware>()`:
+
+```kotlin
+class TimingMiddleware : Middleware {
+    override suspend fun handle(envelope: Envelope, next: MiddlewareChain): Envelope {
+        val start = System.nanoTime()
+        return try {
+            next(envelope)
+        } finally {
+            println("Handled in ${System.nanoTime() - start} ns")
+        }
+    }
+}
+```
+
+### Custom `Stamp`
+
+Implement `Stamp` to attach custom metadata to an `Envelope`:
+
+```kotlin
+data class CorrelationStamp(val correlationId: String) : Stamp
+
+fun Envelope.correlationId(): String? = last<CorrelationStamp>()?.correlationId
+```
+
+### Custom `Transport`
+
+Implement `Transport` (and optionally `SetupableTransport` or `ListableTransport`), then register it with `transport<CustomTransport>("name")`:
+
+```kotlin
+class CustomTransport : Transport {
+    override suspend fun send(envelope: Envelope): Envelope = envelope
+    override suspend fun receive(): List<Envelope> = emptyList()
+    override suspend fun ack(envelope: Envelope) {}
+    override suspend fun reject(envelope: Envelope) {}
+}
+```
+
+### Custom `RetryStrategy`
+
+Implement `RetryStrategy` to control retry eligibility and backoff duration:
+
+```kotlin
+class FixedRetryStrategy(private val maxRetries: Int = 3) : RetryStrategy {
+    override fun isRetryable(envelope: Envelope, failure: Throwable): Boolean =
+        (envelope.last<RedeliveryStamp>()?.retryCount ?: 0) < maxRetries
+
+    override fun waitingTime(envelope: Envelope, failure: Throwable): Duration = 2.seconds
+}
+```
+
+### Bus targeting & ordering
+
+Tag handlers with `MessageHandlerTag` in `src/di/kotlin` to assign a bus and invocation priority (highest first):
+
+```kotlin
+service<GreetHandler> {
+    tag(MessageHandlerTag(bus = "default", priority = 10))
+}
+```

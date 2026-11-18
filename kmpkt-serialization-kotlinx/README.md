@@ -1,46 +1,108 @@
 # kmpkt-serialization-kotlinx
 
-kotlinx.serialization adapter for [`kmpkt-event-store`](../kmpkt-event-store)'s `EventSerializer`.
-Optional: the port lives in `kmpkt-event-store`, so an application can implement it with anything
-else instead.
+A `kotlinx.serialization` adapter for KmpKt event stores, providing `EventSerializer` implementations, JSON defaults, and domain primitive serializers.
+
+## Building Blocks
+
+| Symbol | Role |
+| --- | --- |
+| `KotlinxEventSerializer` | `EventSerializer` implementation and DSL factory using `Json` and a `type` class discriminator. |
+| `DomainEventsBuilder` | DSL builder for registering unsealed `DomainEvent` subtypes. |
+| `persistenceJson` & `createPersistenceJson` | Preconfigured `Json` instance with `type` discriminator, defaults encoded, and unknown keys ignored. |
+| `InstantSerializer` | `KSerializer` encoding and decoding `java.time.Instant` as ISO-8601 strings. |
+| `AggregateUuidSerializer` | `KSerializer` encoding and decoding `AggregateId` values via UUID strings. |
+| `KotlinxSerializationComponent` | DI component providing `Json` via `createPersistenceJson`. |
+
+## Installation
+
+Add the dependency in `build.gradle.kts`:
+
+```kotlin
+dependencies {
+    implementation("io.kmpkt:kmpkt-serialization-kotlinx:0.1.0")
+}
+```
+
+## DI Setup
+
+Register `KotlinxSerializationComponent` in `src/di/kotlin` to provide the default `Json` instance via `createPersistenceJson`:
+
+```kotlin
+import io.kmpkt.di.compiler.Configuration
+import io.kmpkt.di.compiler.ContainerBuilder
+import io.kmpkt.serialization.kotlinx.di.KotlinxSerializationComponent
+
+class AppConfiguration : Configuration<App> {
+    override fun ContainerBuilder.configure() {
+        use<KotlinxSerializationComponent>()
+    }
+}
+```
 
 ## Usage
 
-Group the aggregate's events under one `@Serializable sealed` parent and hand its serializer over - the
-compiler plugin generates the polymorphic dispatch, so there is no registry to keep in sync and a forgotten
-event type cannot happen:
+In `src/main/kotlin`, use `KotlinxEventSerializer` with a `@Serializable sealed` event hierarchy (preferred for compiler-checked exhaustiveness):
 
 ```kotlin
-@Serializable
-sealed interface ListEvent : DomainEvent<ManagedList>
+import io.kmpkt.aggregate.event.DomainEvent
+import io.kmpkt.serialization.kotlinx.InstantSerializer
+import io.kmpkt.serialization.kotlinx.KotlinxEventSerializer
+import kotlinx.serialization.SerialName
+import kotlinx.serialization.Serializable
+import java.time.Instant
 
 @Serializable
-@SerialName("ItemAdded")
-data class ItemAdded(...) : ListEvent
+sealed interface OrderEvent : DomainEvent<Order>
 
-val eventSerializer = KotlinxEventSerializer(ListEvent.serializer())
+@Serializable
+@SerialName("OrderCreated")
+data class OrderCreated(
+    @Serializable(with = InstantSerializer::class)
+    val occurredAt: Instant,
+) : OrderEvent
+
+val eventSerializer = KotlinxEventSerializer(OrderEvent.serializer())
 ```
 
-Defaults to `persistenceJson` (discriminator `type`, unknown keys ignored so a record written by an older
-schema still reads). Pass your own `Json` to override it.
+For unsealed or multiple event hierarchies, register subtypes via `DomainEventsBuilder`:
 
-An application whose events share no sealed parent - several aggregates with their own hierarchies, say -
-lists them instead:
+```kotlin
+import io.kmpkt.serialization.kotlinx.KotlinxEventSerializer
+
+val eventSerializer =
+    KotlinxEventSerializer {
+        event<OrderCreated>()
+        event<InvoiceIssued>()
+    }
+```
+
+## Extending
+
+Pass a custom `Json` instance to `KotlinxEventSerializer`, keeping `classDiscriminator` set so polymorphic serialization emits the type field:
+
+```kotlin
+val customJson = Json {
+    classDiscriminator = "type"
+    prettyPrint = true
+    ignoreUnknownKeys = true
+}
+val eventSerializer = KotlinxEventSerializer(OrderEvent.serializer(), customJson)
+```
+
+Supply a custom `KSerializer` for an individual event inside `DomainEventsBuilder` when it needs non-default wire formatting:
 
 ```kotlin
 val eventSerializer =
     KotlinxEventSerializer {
-        event<ItemAdded>()
-        event<CategoryAdded>()
+        event<OrderCreated>(LegacyOrderCreatedSerializer)
     }
 ```
 
-That hands the listing to kotlinx's own `SerializersModule`/`PolymorphicSerializer`, so the wire format is
-identical to the sealed case - same `type` discriminator, from the same `@SerialName` - and you can move
-between the two without touching stored data. Prefer the sealed parent where you can have one: there a
-forgotten event is a compile error, here it is a failure the first time one is read back.
+Implement `EventSerializer` directly if you prefer a serialization library other than `kotlinx.serialization`:
 
-## Helpers
-
-`InstantSerializer` for `java.time.Instant` as ISO-8601, and `AggregateUuidSerializer` for a UUID-backed
-`AggregateId`. Reference them per property: `@Serializable(with = InstantSerializer::class)`.
+```kotlin
+class JacksonEventSerializer(private val mapper: ObjectMapper) : EventSerializer {
+    override fun serialize(event: DomainEvent<*>): SerializedEvent = TODO()
+    override fun deserialize(serialized: SerializedEvent): DomainEvent<*> = TODO()
+}
+```

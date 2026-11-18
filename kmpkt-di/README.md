@@ -1,30 +1,74 @@
 # kmpkt-di
 
-Runtime contracts for KMPKt's compile-time dependency injection.
+Runtime contracts for KmpKt compile-time dependency injection. Defines the application marker and startup runner interfaces used as entry points for the generated `io.kmpkt.di.KmpKt` launcher.
 
-## Scope
+## Building Blocks
 
-- `KmpKtApplication`: marker interface for an application entry point wired by a `Configuration<A>`.
-- `ApplicationRunner`: functional interface (`run(args: Array<String>)`) whose implementations are autoconfigured and invoked by `KmpKt.run<A>(args)`.
+| Symbol | Description |
+| --- | --- |
+| `KmpKtApplication` | Marker interface for an application entry point wired by a `Configuration`, including `KmpKtApplication.Default` for applications without a custom marker. |
+| `ApplicationRunner` | Startup runner interface automatically tagged with `ApplicationRunnerTag`, retained by dead-code elimination, and invoked in priority order by `KmpKt.run`. |
+
+## Installation
+
+Apply the `io.kmpkt.di` Gradle plugin in `build.gradle.kts` for both your feature/core module and your entrypoint (`app`) module. It adds `kmpkt-di` automatically and creates the `src/di/kotlin` source set:
+
+```kotlin
+plugins {
+    kotlin("jvm")
+    id("io.kmpkt.di") version "0.1.0"
+}
+```
 
 ## Usage
 
+Define your `KmpKtApplication` marker and `ApplicationRunner` implementations in `core/src/main/kotlin`, wire them in `core/src/di/kotlin` with `Configuration<TodoApp>`, and launch from a downstream `app` module in `app/src/main/kotlin`:
+
 ```kotlin
+// core/src/main/kotlin/TodoRunner.kt
+import io.kmpkt.di.ApplicationRunner
+import io.kmpkt.di.KmpKtApplication
+
 object TodoApp : KmpKtApplication
 
 class TodoRunner(
-    private val commands: CommandBus,
+    private val service: TodoService,
 ) : ApplicationRunner {
-    override fun run(args: Array<String>) = runBlocking {
-        commands.dispatch(AddTodo("1", "Buy milk"))
+    override fun run(args: Array<String>) {
+        service.execute(args)
     }
 }
+```
+
+```kotlin
+// app/src/main/kotlin/Main.kt
+import io.kmpkt.di.KmpKt
 
 fun main(args: Array<String>) = KmpKt.run<TodoApp>(args)
 ```
 
-## Related Modules
+## Extending
 
-- [`kmpkt-di-compiler-api`](../kmpkt-di-compiler-api): container builder, `Component`, `Configuration`, `BuilderPass`, and compiler pipeline.
-- [`kmpkt-di-compiler`](../kmpkt-di-compiler): KSP processor and KotlinPoet code generator.
-- [`kmpkt-di-compiler-plugin`](../kmpkt-di-compiler-plugin): Gradle plugin (`io.kmpkt.di`) wiring `di` source sets and KSP.
+### Custom application marker
+
+Implement `KmpKtApplication` to define a named application entry point (or use `KmpKtApplication.Default` for single-application modules):
+
+```kotlin
+import io.kmpkt.di.KmpKtApplication
+
+object BillingApp : KmpKtApplication
+```
+
+### Startup runner
+
+Implement `ApplicationRunner` on any service that should be instantiated and executed on startup by `KmpKt.run`:
+
+```kotlin
+import io.kmpkt.di.ApplicationRunner
+
+class MigrationRunner(private val migrator: Migrator) : ApplicationRunner {
+    override fun run(args: Array<String>) {
+        migrator.migrate()
+    }
+}
+```

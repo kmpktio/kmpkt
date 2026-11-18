@@ -1,12 +1,35 @@
 # kmpkt-di-compiler-plugin
 
-Gradle plugin (`KmpktDiPlugin`) that configures KSP and `di` source sets for projects using [`kmpkt-di`](../kmpkt-di).
+Gradle plugin (`io.kmpkt.di`) that wires KSP, `src/di/kotlin` source sets, and transitive DI metadata propagation for Kotlin JVM and Kotlin Multiplatform projects.
 
-## Scope
+## What It Configures
 
-- `KmpktDiPlugin`: applies `com.google.devtools.ksp`, creates and wires the `di` source set (`src/di/kotlin`, `src/di/resources`) for Kotlin JVM and Kotlin Multiplatform projects, propagates `-Xexplicit-api=strict` to the `di` compilation when enabled on the project, and exposes `diElements` artifacts across project dependencies.
-- `KmpktDiExtension` (`kmpktDi` DSL): configures `groupId` (default `"io.kmpkt"`) and `version` (default `"0.1.0"`) for automatic `kmpkt-di`, `kmpkt-di-compiler`, and `kmpkt-di-compiler-api` dependencies.
+When applied, `io.kmpkt.di` automatically sets up:
 
-## Mutation Testing
+- **KSP & compiler:** applies `com.google.devtools.ksp` and adds `kmpkt-di-compiler` to `ksp` and `kspDi`.
+- **DI source set:** creates the `di` source set (Kotlin JVM) or `jvm` `di` compilation (Kotlin Multiplatform) at `src/di/kotlin` and `src/di/resources`, propagating `-Xexplicit-api=strict` when enabled.
+- **Dependencies:** adds `kmpkt-di` and `kmpkt-di-compiler-api` to the appropriate configurations.
+- **Multi-module propagation:** exposes `diJar` via `diElements` so downstream modules inherit upstream `di` metadata transitively.
+- **App vs. library detection:** detects `KmpKt.run` in `main` or `commonMain` to place `diJar` on the application's `ksp` classpath, while associating `di` with `main` output in library modules.
 
-Pitest is disabled for this module: `KmpktDiPluginTest` verifies the plugin via Gradle TestKit (`GradleRunner`), which executes in a separate Gradle daemon process outside Pitest's instrumented classloader, leaving TestKit-covered code reported as `NO_COVERAGE`.
+## How to use
+
+Apply the plugin in your module's `build.gradle.kts`:
+
+```kotlin
+plugins {
+    kotlin("jvm")
+    id("io.kmpkt.di") version "0.1.0"
+}
+```
+
+Optionally override the resolved `kmpkt-di` artifact coordinates via the `kmpktDi` extension:
+
+```kotlin
+kmpktDi {
+    groupId.set("io.kmpkt")
+    version.set("0.1.0")
+}
+```
+
+For the module boundary between `core/src/di/kotlin` and `app`, see [`kmpkt-di`](../kmpkt-di/README.md). For the DSL used inside `src/di/kotlin`, see [`kmpkt-di-compiler-api`](../kmpkt-di-compiler-api/README.md).

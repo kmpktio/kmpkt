@@ -1,29 +1,94 @@
 # kmpkt-policy
 
-"Given this event, then that command" - a generalized, reusable shape for reacting to domain events with
-follow-up commands, independent of whatever actually dispatches them. No dependency on a message bus, a
-scheduler, or anything else infrastructure-specific - that's deliberate, so this stays usable regardless of
-how events reach it (a messenger bridge, a plain in-process call, a future subscription worker, ...).
+Event-reaction policies that map a `DomainEvent` to follow-up `Command` instances, along with a messenger `Transport` and handler for polling the `EventStore` and dispatching decided commands onto a `CommandBus`.
 
-## Scope
+## Building Blocks
 
-- `Policy<E>`: reacts to one event type, deciding which `Command`s (if any) should run because of it. Pure -
-  a policy decides, it never dispatches.
-- `Command`: a marker interface for whatever a policy decided should run. What a concrete `Command` actually
-  looks like, and how it eventually gets executed, is entirely up to the consuming application.
-- `PolicyExecutor`: looks up every `Policy` registered for an incoming event's type and collects the commands
-  they decide on.
+| Symbol | Role |
+| --- | --- |
+| `Policy<in E>` | Pure reaction interface that decides follow-up commands for an event without dispatching them |
+| `PolicyExecutor` | Registry of `Policy` instances grouped by event class |
+| `PolicyTransport` | Messenger `Transport` that polls `EventStore` and persists progress in `Persistence` |
+| `ExecutePolicyCommandsForEvent` | Message wrapping a `DomainEvent<*>` emitted by `PolicyTransport` |
+| `ExecutePolicyCommandsForEventHandler` | Message handler that evaluates `PolicyExecutor` and dispatches commands to `CommandBus` |
+| `PolicyComponent`, `ContainerBuilder.policy` | DI component and DSL (`PolicyOptions`) auto-discovering `Policy<*>` services and wiring transport and handler |
+
+## Installation
+
+Add the dependency in `build.gradle.kts`:
+
+```kotlin
+dependencies {
+    implementation(project(":kmpkt-policy"))
+}
+```
+
+## DI Setup
+
+In `src/di/kotlin`, configure `policy` (requires `CommandComponent` and `MessengerComponent`) and discover `Policy<*>` implementations:
+
+```kotlin
+import io.kmpkt.command.di.command
+import io.kmpkt.di.compiler.Configuration
+import io.kmpkt.di.compiler.ContainerBuilder
+import io.kmpkt.messenger.di.messenger
+import io.kmpkt.policy.Policy
+import io.kmpkt.policy.di.policy
+
+class AppConfiguration : Configuration<App> {
+    override fun ContainerBuilder.configure() {
+        command()
+        messenger()
+        policy {
+            name = "policies"
+        }
+
+        discover("com.example.app") {
+            services<Policy<*>>()
+        }
+    }
+}
+```
 
 ## Usage
 
+In `src/main/kotlin`, implement `Policy<E>` to return follow-up commands for an event, or evaluate policies directly with `PolicyExecutor`:
+
 ```kotlin
+import io.kmpkt.command.Command
+import io.kmpkt.policy.Policy
+import io.kmpkt.policy.PolicyExecutor
+
 class SortOnItemAdded : Policy<ItemAdded> {
-    override fun decide(event: ItemAdded): List<Command> = listOf(SortList(event.listId))
+    override fun decide(event: ItemAdded): List<Command> =
+        listOf(SortList(event.listId))
 }
 
-val executor = PolicyExecutor().apply { register(SortOnItemAdded()) }
-val commands = executor.commandsFor(someEvent) // dispatch each one however your app does that
+fun evaluateDirectly(event: ItemAdded): List<Command> {
+    val executor = PolicyExecutor().apply { register(SortOnItemAdded()) }
+    return executor.commandsFor(event)
+}
 ```
 
-`register` is a `reified` overload - it infers which event type a `Policy` handles from `decide`'s own
-signature, nothing to declare separately.
+## Extending
+
+**Sealed event hierarchies:** Implement `Policy<E>` for a sealed event base type (since `E` is contravariant) to handle multiple lifecycle events in one policy.
+
+```kotlin
+class ListLifecyclePolicy : Policy<ListEvent> {
+    override fun decide(event: ListEvent): List<Command> = when (event) {
+        is ListCreated -> listOf(InitializeDefaults(event.aggregate))
+        is ListArchived -> listOf(NotifyOwner(event.aggregate))
+    }
+}
+```
+
+**Custom dispatch:** Evaluate `PolicyExecutor.commandsFor` directly when routing or batching decided commands outside `PolicyTransport` and `ExecutePolicyCommandsForEventHandler`.
+
+```kotlin
+suspend fun dispatchPolicies(executor: PolicyExecutor, bus: CommandBus, event: DomainEvent<*>) {
+    executor.commandsFor(event).forEach { command ->
+        bus.dispatch(command)
+    }
+}
+```

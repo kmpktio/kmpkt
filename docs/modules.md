@@ -1,6 +1,6 @@
 # Module Guide
 
-`kmpkt` is split into focused modules so applications only pull in the capabilities they need.
+KmpKt is split into focused modules so applications only pull in the capabilities they need.
 
 ## Dependency Injection
 
@@ -56,6 +56,11 @@
   dispatches follow-up commands.
 - [`kmpkt-projection`](../kmpkt-projection/README.md) — `Projector` and `ProjectionStore` —
   builds read models from stored events.
+
+## Resilience
+
+- [`kmpkt-resilience`](../kmpkt-resilience/README.md) — Fault-tolerance and resilience
+  primitives.
 
 ## Framework Bridges
 

@@ -1,10 +1,10 @@
 # Getting Started
 
-This guide shows how to add `kmpkt` to a Kotlin/JVM Gradle project.
+This guide shows how to add KmpKt to a Kotlin/JVM Gradle project.
 
 ## 1. Configure Repositories
 
-`kmpkt` is published to GitHub Packages. In `settings.gradle.kts`, add the GitHub Packages
+KmpKt is published to GitHub Packages. In `settings.gradle.kts`, add the GitHub Packages
 repository to both `pluginManagement` and `dependencyResolutionManagement` (using `gpr.user`
 and `gpr.key` in `~/.gradle/gradle.properties`, or `GITHUB_ACTOR` / `GITHUB_TOKEN`):
 
