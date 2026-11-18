@@ -1,5 +1,7 @@
 # Getting Started
 
+> **Active Development:** KmpKt is in active early development (pre-1.0); APIs, module boundaries, and configuration DSLs may still change between releases.
+
 This guide shows how to add KmpKt to a Kotlin/JVM Gradle project.
 
 ## 1. Configure Repositories
