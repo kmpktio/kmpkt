@@ -18,6 +18,7 @@ kotlin {
 dependencies {
     api(project(":kmpkt-persistence"))
 
+    implementation(project(":kmpkt-resilience"))
     implementation(libs.flyway.core)
     // Flyway 10 split its engine support out: flyway-core alone answers "Unsupported Database:
     // PostgreSQL". Only needed by a deployment that runs on PostgreSQL, so it is the application's

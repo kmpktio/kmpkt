@@ -16,6 +16,7 @@ kotlin {
 }
 
 dependencies {
+    api(project(":kmpkt-resilience"))
     api(project(":kmpkt-worker"))
     api(libs.kotlinx.coroutines.core)
     api(libs.slf4j.api)

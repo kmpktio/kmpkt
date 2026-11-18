@@ -4,6 +4,7 @@ import io.kmpkt.persistence.AppendLog
 import io.kmpkt.persistence.KeyValueStore
 import io.kmpkt.persistence.Persistence
 import io.kmpkt.persistence.WorkQueue
+import io.kmpkt.resilience.Fuse
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
