@@ -8,6 +8,8 @@ import io.kotest.matchers.collections.shouldBeEmpty
 import io.kotest.matchers.collections.shouldHaveSize
 import io.kotest.matchers.nulls.shouldBeNull
 import io.kotest.matchers.shouldBe
+import kotlinx.coroutines.flow.take
+import kotlinx.coroutines.flow.toList
 import java.nio.file.Files
 import java.time.Instant
 
@@ -146,5 +148,28 @@ class JdbcPersistenceTest :
 
             queue.enqueue("j1", "payload", now)
             queue.claim(now).map { it.id } shouldBe listOf("j1")
+        }
+
+        test("workQueue supports list, find, and remove") {
+            val dbFile = Files.createTempFile("kmpkt-queue-list-", ".db").toFile().apply { deleteOnExit() }
+            val dataSource = DataSourceFactory.create(PersistenceConfig("jdbc:sqlite:${dbFile.absolutePath}"))
+            val queue = JdbcWorkQueue(dataSource, "jobs", pageSize = 2)
+            queue.setup()
+
+            queue.enqueue("j1", "p1", now)
+            queue.enqueue("j2", "p2", now.plusSeconds(1))
+            queue.enqueue("j3", "p3", now.plusSeconds(1))
+
+            queue.list().toList().map { it.id } shouldBe listOf("j1", "j2", "j3")
+            queue
+                .list()
+                .take(1)
+                .toList()
+                .map { it.id } shouldBe listOf("j1")
+            queue.find("j2")?.payload shouldBe "p2"
+            queue.find("missing") shouldBe null
+            queue.remove("j1") shouldBe true
+            queue.remove("j1") shouldBe false
+            queue.list().toList().map { it.id } shouldBe listOf("j2", "j3")
         }
     })

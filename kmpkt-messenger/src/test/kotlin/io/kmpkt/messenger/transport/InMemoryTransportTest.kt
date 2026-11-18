@@ -6,6 +6,8 @@ import io.kmpkt.messenger.stamp.DelayStamp
 import io.kotest.core.spec.style.FunSpec
 import io.kotest.matchers.collections.shouldBeEmpty
 import io.kotest.matchers.shouldBe
+import kotlinx.coroutines.flow.take
+import kotlinx.coroutines.flow.toList
 import java.time.Clock
 import java.time.Instant
 import java.time.ZoneId
@@ -70,5 +72,26 @@ class InMemoryTransportTest :
             transport.acknowledged() shouldBe listOf(acked)
             transport.rejected() shouldBe listOf(rejected)
             transport.receive().shouldBeEmpty()
+        }
+
+        test("supports all, find, and remove as a ListableTransport") {
+            val transport = InMemoryTransport()
+            transport.send(Envelope(Greet("first")))
+            transport.send(Envelope(Greet("second")))
+
+            val all = transport.all().toList()
+            all.map { (it.envelope.message as Greet).name } shouldBe listOf("first", "second")
+            transport
+                .all()
+                .take(1)
+                .toList()
+                .map { it.id } shouldBe listOf(all.first().id)
+
+            transport.find(all.last().id)?.envelope shouldBe all.last().envelope
+            transport.find("missing") shouldBe null
+
+            transport.remove(all.first().id) shouldBe true
+            transport.remove(all.first().id) shouldBe false
+            transport.all().toList().map { it.id } shouldBe listOf(all.last().id)
         }
     })

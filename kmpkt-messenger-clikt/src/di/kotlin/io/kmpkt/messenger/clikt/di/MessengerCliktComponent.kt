@@ -5,7 +5,10 @@ import io.kmpkt.di.compiler.Component
 import io.kmpkt.di.compiler.ContainerBuilder
 import io.kmpkt.di.compiler.SimpleComponent
 import io.kmpkt.messenger.clikt.ConsumeCommand
+import io.kmpkt.messenger.clikt.RemoveFailedCommand
+import io.kmpkt.messenger.clikt.RetryFailedCommand
 import io.kmpkt.messenger.clikt.SetupTransportsCommand
+import io.kmpkt.messenger.clikt.ShowFailedCommand
 import io.kmpkt.messenger.di.MessengerComponent
 import kotlin.reflect.KClass
 
@@ -18,5 +21,8 @@ public class MessengerCliktComponent : SimpleComponent {
     override fun ContainerBuilder.register() {
         service<ConsumeCommand>()
         service<SetupTransportsCommand>()
+        service<ShowFailedCommand>()
+        service<RetryFailedCommand>()
+        service<RemoveFailedCommand>()
     }
 }

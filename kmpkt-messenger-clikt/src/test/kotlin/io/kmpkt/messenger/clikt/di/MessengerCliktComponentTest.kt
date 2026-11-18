@@ -14,7 +14,10 @@ import io.kmpkt.di.compiler.fixture.parameter
 import io.kmpkt.di.compiler.typeRef
 import io.kmpkt.messenger.bus.MessengerCatalog
 import io.kmpkt.messenger.clikt.ConsumeCommand
+import io.kmpkt.messenger.clikt.RemoveFailedCommand
+import io.kmpkt.messenger.clikt.RetryFailedCommand
 import io.kmpkt.messenger.clikt.SetupTransportsCommand
+import io.kmpkt.messenger.clikt.ShowFailedCommand
 import io.kmpkt.messenger.di.MessengerComponent
 import io.kmpkt.messenger.di.fixture.declareMessenger
 import io.kmpkt.messenger.di.messenger
@@ -39,6 +42,18 @@ class MessengerCliktComponentTest :
                         supertypes = listOf(typeRef<CliktCommand>()),
                     )
                     declare<SetupTransportsCommand>(
+                        parameter<MessengerCatalog>("catalog"),
+                        supertypes = listOf(typeRef<CliktCommand>()),
+                    )
+                    declare<ShowFailedCommand>(
+                        parameter<MessengerCatalog>("catalog"),
+                        supertypes = listOf(typeRef<CliktCommand>()),
+                    )
+                    declare<RetryFailedCommand>(
+                        parameter<MessengerCatalog>("catalog"),
+                        supertypes = listOf(typeRef<CliktCommand>()),
+                    )
+                    declare<RemoveFailedCommand>(
                         parameter<MessengerCatalog>("catalog"),
                         supertypes = listOf(typeRef<CliktCommand>()),
                     )
