@@ -2,6 +2,7 @@ package io.kmpkt.persistence.jdbc
 
 import io.kmpkt.persistence.QueuedItem
 import io.kmpkt.persistence.WorkQueue
+import io.kmpkt.resilience.Fuse
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.time.Instant
