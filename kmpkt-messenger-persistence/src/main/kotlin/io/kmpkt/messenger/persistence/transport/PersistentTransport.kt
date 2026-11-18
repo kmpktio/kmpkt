@@ -12,8 +12,9 @@ import io.kmpkt.persistence.WorkQueue
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
 import java.time.Clock
-import java.util.UUID
 import kotlin.time.toJavaDuration
+import kotlin.uuid.ExperimentalUuidApi
+import kotlin.uuid.Uuid
 
 /**
  * Durable [SetupableTransport] backed by a [WorkQueue].
@@ -35,11 +36,12 @@ public class PersistentTransport(
         workQueue.setup()
     }
 
+    @OptIn(ExperimentalUuidApi::class)
     override suspend fun send(envelope: Envelope): Envelope {
         val delay = envelope.last<DelayStamp>()?.delay
         val availableAt = if (delay == null) clock.instant() else clock.instant().plus(delay.toJavaDuration())
         workQueue.enqueue(
-            id = UUID.randomUUID().toString(),
+            id = Uuid.random().toString(),
             payload = serializer.serialize(envelope),
             availableAt = availableAt,
         )
