@@ -12,7 +12,8 @@ import io.kmpkt.persistence.LogEntry
 import io.kmpkt.persistence.LogVersionConflictException
 import io.kmpkt.persistence.NewLogEntry
 import io.kmpkt.persistence.Persistence
-import java.util.UUID
+import kotlin.uuid.ExperimentalUuidApi
+import kotlin.uuid.Uuid
 
 /**
  * [EventStore] backed by any [Persistence] implementation via a named [AppendLog].
@@ -29,6 +30,7 @@ public class PersistentEventStore(
         logName: String = "events",
     ) : this(persistence.appendLog(logName), eventSerializer, checkpointPredicate)
 
+    @OptIn(ExperimentalUuidApi::class)
     override suspend fun <A : AggregateRoot<A>> append(
         type: AggregateType<A>,
         id: AggregateId<A>,
@@ -40,7 +42,7 @@ public class PersistentEventStore(
             events.map { event ->
                 val serialized = eventSerializer.serialize(event)
                 NewLogEntry(
-                    id = UUID.randomUUID().toString(),
+                    id = Uuid.random().toString(),
                     type = serialized.type,
                     payload = serialized.payload,
                     occurredAt = event.occurredAt,
