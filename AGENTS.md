@@ -27,3 +27,14 @@
 - **Reject conflicting target arguments:** When a command accepts positional targets alongside `--all`, reject both being passed together with `UsageError` rather than letting `--all` silently win.
 - **Register in DI:** Register every new `CliktCommand` in its module's DI `SimpleComponent` (`MessengerCliktComponent`) and cover it in the component wiring test.
 
+## Module & Example READMEs
+
+- **Keep READMEs in sync:** When changing a module's public API, DI component/DSL, or behavior, update its `README.md`. Every new module must ship with a `README.md` and be listed in `docs/modules.md` (and `kmpkt-docs` sidebar).
+- **Brand & prose style:** Write `KmpKt` in prose without backticks; use lowercase `kmpkt` only for package names (`io.kmpkt.*`), module slugs (`kmpkt-*`), and URLs. Keep prose readable — put code signatures in `kotlin` blocks and flows in `mermaid` blocks rather than inline prose bullets.
+- **Runtime/API module structure** *(build-only modules like `kmpkt-di-compiler` / `kmpkt-di-compiler-plugin` describe what they configure/generate and link to `kmpkt-di-compiler-api`)*:
+  1. `# <module>` + concise 1–2 sentence overview
+  2. `## Building Blocks` — 2-column table (`Symbol` | `Description`) of **public** API/SPI only (no `Package` column, no `internal` classes)
+  3. `## Installation` — `build.gradle.kts` dependency
+  4. `## DI Setup` — `src/di/kotlin` configuration, if the module provides a DI `Component` or DSL
+  5. `## Usage` — `src/main/kotlin` usage, kept separate from `DI Setup`
+  6. `## Extending` — concrete `kotlin` examples for extension points, if any

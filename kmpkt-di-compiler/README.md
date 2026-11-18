@@ -1,11 +1,22 @@
 # kmpkt-di-compiler
 
-KSP symbol processor and KotlinPoet code generator for [`kmpkt-di`](../kmpkt-di).
+Build-time KSP processor and KotlinPoet code generator that compiles the DI container for KmpKt applications.
 
-## Scope
+This module exposes no public Kotlin API to import or extend. It only runs inside KSP during compilation:
 
-- `ContainerProcessorProvider` / `ContainerProcessor`:
-  - In a `di` source set or `-di` module, discovers `Component` and `Configuration` implementations and registers them in `META-INF/services`.
-  - In an application module, loads components and configurations from the processor classpath, runs `ContainerCompiler` for each `Configuration<A>`, and generates `KmpKt.run<A>(args)`.
-- `KspTypeOracle`: adapts KSP type and constructor metadata to `TypeOracle` from [`kmpkt-di-compiler-api`](../kmpkt-di-compiler-api).
-- `ContainerGenerator`: emits the generated Kotlin container source file via KotlinPoet.
+1. **In `di` source sets:** discovers DI components and configurations and writes their `META-INF/services` registrations.
+2. **In `app` modules:** compiles the container from all discovered registrations on the classpath and generates `io.kmpkt.di.KmpKt`.
+
+## How to use
+
+In most projects, apply [`kmpkt-di-compiler-plugin`](../kmpkt-di-compiler-plugin/README.md) (`io.kmpkt.di`), which adds this processor to KSP automatically.
+
+If you configure KSP manually:
+
+```kotlin
+dependencies {
+    ksp("io.kmpkt:kmpkt-di-compiler:0.1.0")
+}
+```
+
+For the DI DSL and extension points compiled by this processor, see [`kmpkt-di-compiler-api`](../kmpkt-di-compiler-api/README.md).

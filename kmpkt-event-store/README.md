@@ -1,28 +1,114 @@
 # kmpkt-event-store
 
-The append-only log: one global `EventStore` of streams, with optimistic concurrency — and no assumption about
-where any of it is stored. An in-memory implementation is included as the default. The aggregates and events
-it stores are [`kmpkt-aggregate`](../kmpkt-aggregate); everything else is a separate, optional module:
-snapshotting ([`kmpkt-aggregate-snapshot`](../kmpkt-aggregate-snapshot)), JSON (de)serialization
-([`kmpkt-serialization-kotlinx`](../kmpkt-serialization-kotlinx)), durable storage
-([`kmpkt-persistence-jdbc`](../kmpkt-persistence-jdbc)).
+Global append-only event log with per-stream optimistic concurrency, event serialization ports, and a replay-based `AggregateRepository` implementation.
 
-## Scope
+## Building Blocks
 
-- `EventStore`: port - **one global append-only log of streams**, one instance for every aggregate type. A stream is identified by `(AggregateType, AggregateId)`.
-  `loadFrom`'s positions are a single order over the whole log, which is what lets a subscriber spanning
-  several aggregates see their events in the order they happened. `InMemoryEventStore` is the default,
-  non-durable implementation.
-- `DefaultAggregateRepository<A>`: implements `kmpkt-aggregate`'s `AggregateRepository` by always replaying
-  full history. `SnapshotAggregateRepository` (in `kmpkt-aggregate-snapshot`) is for aggregates with enough
-  events that replaying all of them on every load gets expensive.
-- `StoredEvent`: an event as the log holds it, with its global position.
+| Symbol | Role |
+| --- | --- |
+| `EventStore` | Port for appending to aggregate streams, loading stream history, and tailing the global log |
+| `InMemoryEventStore` | Coroutine-safe, non-persistent `EventStore` backed by in-memory collections |
+| `PersistentEventStore` | `EventStore` backed by `Persistence`, `AppendLog`, and an `EventSerializer` |
+| `StoredEvent` | Pairs a global log position with a `DomainEvent<*>` |
+| `DefaultAggregateRepository<A>` | Repository implementation that persists recorded events and rebuilds aggregates from history |
+| `EventCheckpointPredicate`, `NoOpEventCheckpointPredicate` | Identifies checkpoint events so stream loads can resume from the latest checkpoint |
+| `EventSerializer`, `SerializedEvent` | Port converting between `DomainEvent<*>` and a serialized type-plus-payload pair |
+| `EventPositionStamp` | Messenger stamp carrying the event's global log position |
+| `EventStoreComponent`, `ContainerBuilder.eventStore` | DI component and DSL (`EventStoreOptions`) wiring `PersistentEventStore` and aggregate repositories |
+| `AggregateRepositoryTag` | DI tag marking registered aggregate repository definitions |
 
-See [`kmpkt-aggregate`](../kmpkt-aggregate) for how an aggregate and its events are written.
+## Installation
 
-## Persisting events
+Add the dependency in `build.gradle.kts`:
 
-`EventSerializer` is the port a durable store needs: it turns a `DomainEvent` into a `SerializedEvent`
-(`type` + `payload`) and back. This module deliberately depends on no serialization library, so the choice
-stays with the application — [`kmpkt-serialization-kotlinx`](../kmpkt-serialization-kotlinx)
-is one implementation, your own is just as valid.
+```kotlin
+dependencies {
+    implementation(project(":kmpkt-event-store"))
+}
+```
+
+## DI Setup
+
+In `src/di/kotlin`, configure `eventStore` alongside `persistence` and `aggregate` (`EventStoreComponent` requires `AggregateComponent` and `PersistenceComponent` and registers a `DefaultAggregateRepository<A>` for each declared aggregate):
+
+```kotlin
+import io.kmpkt.aggregate.di.aggregate
+import io.kmpkt.aggregate.factory.AggregateFactory
+import io.kmpkt.di.compiler.Configuration
+import io.kmpkt.di.compiler.ContainerBuilder
+import io.kmpkt.di.compiler.service
+import io.kmpkt.event.store.di.eventStore
+import io.kmpkt.persistence.di.persistence
+
+class AppConfiguration : Configuration<App> {
+    override fun ContainerBuilder.configure() {
+        persistence { /* ... */ }
+        aggregate {
+            aggregate<Counter>("counter")
+        }
+        eventStore {
+            logName = "events"
+        }
+
+        service<CounterFactory> { bind<AggregateFactory<Counter>>() }
+    }
+}
+```
+
+## Usage
+
+In `src/main/kotlin`, use `DefaultAggregateRepository` with `InMemoryEventStore` directly, or inject `AggregateRepository<A>` when wired through DI:
+
+```kotlin
+import io.kmpkt.aggregate.value.AggregateType
+import io.kmpkt.event.store.InMemoryEventStore
+import io.kmpkt.event.store.repository.DefaultAggregateRepository
+
+suspend fun runExample() {
+    val eventStore = InMemoryEventStore()
+    val repository = DefaultAggregateRepository(
+        eventStore = eventStore,
+        aggregateType = AggregateType.of<Counter>(),
+        factory = Counter,
+    )
+
+    val counter = Counter.create()
+    counter.increment()
+    repository.save(counter)
+
+    val loaded = repository.get(counter.id)
+}
+```
+
+## Extending
+
+**Custom serialization:** Implement `EventSerializer` to convert domain events to and from `SerializedEvent`.
+
+```kotlin
+class JsonEventSerializer : EventSerializer {
+    override fun serialize(event: DomainEvent<*>): SerializedEvent =
+        SerializedEvent(type = event::class.qualifiedName!!, payload = encodeToJson(event))
+
+    override fun deserialize(serialized: SerializedEvent): DomainEvent<*> =
+        decodeFromJson(serialized.type, serialized.payload)
+}
+```
+
+**Custom storage backend:** Implement `EventStore` directly when you need a storage engine outside `Persistence` and `AppendLog`.
+
+```kotlin
+class CustomEventStore : EventStore {
+    override suspend fun append(type: AggregateType<*>, id: AggregateId<*>, expectedVersion: Long, events: List<DomainEvent<*>>) { /* ... */ }
+    override suspend fun load(type: AggregateType<*>, id: AggregateId<*>): List<DomainEvent<*>> = emptyList()
+    override suspend fun loadFrom(position: Long, limit: Int): List<StoredEvent> = emptyList()
+    override suspend fun latestPosition(): Long = 0L
+}
+```
+
+**Stream checkpoints:** Implement `EventCheckpointPredicate` to mark events that act as stream checkpoints.
+
+```kotlin
+class CompactionCheckpointPredicate : EventCheckpointPredicate {
+    override fun isCheckpoint(event: DomainEvent<*>): Boolean = event is StateCompacted
+}
+```

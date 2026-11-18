@@ -1,71 +1,118 @@
 # kmpkt-worker
 
-The loop around something that has to keep happening: polling a transport, bringing a subscription up to date,
-draining a queue. Nothing in here knows what the work is - it only knows how often to ask, what to do when it
-fails, and how to be stopped.
+Coroutine-based polling loop (`Worker`) with configurable idle backoff, retry strategies, and optional distributed locking (`WorkLock`) for KmpKt background tasks. Depends only on `kotlinx-coroutines-core` and `slf4j-api`.
 
-A leaf module: it depends on coroutines and SLF4J, and on nothing else of this family. `kmpkt-messenger` and the
-event-sourcing subscription side both use it, which is the reason it exists separately - the twenty lines of a
-polling loop are the ones that are easy to get wrong (busy-spinning, a swallowed cancellation, an error that
-loops forever), and having them twice means getting them wrong twice.
+## Building Blocks
 
-## Scope
+| Symbol | Purpose |
+| --- | --- |
+| `Work` | Functional interface for a single polling pass returning the processed item count |
+| `Worker` | Sealed interface representing a named polling loop |
+| `ManagedWorker` | Lifecycle-managed worker with `start()`, `stop()`, `isRunning`, and `onGiveUp` handling |
+| `createManagedWorker` | Factory helper creating a `ManagedWorker` with a per-worker logger |
+| `UnmanagedWorker` | Foreground worker running in the caller's coroutine and rethrowing exhausted failures |
+| `RetryStrategy` | Backoff strategy with `none`, `fixed`, `backOff`, and `forever` factories |
+| `WorkLock` | Mutual-exclusion lock interface for single-active-worker execution |
+| `LockedWork` | `Work` decorator that runs a delegate only when the `WorkLock` is acquired |
+| `WorkerComponent` | DI component that discovers `Work` services and registers a `ManagedWorker` for each |
+| `WorkTag`, `ManagedWorkerTag` | DI tags for discovered `Work` and generated `ManagedWorker` services |
+| `RegisterWorkersPass` | `BuilderPass` that wires a `ManagedWorker` for each tagged `Work` service |
 
-- `Work`: one pass. Returns how many units it handled, so the worker knows whether to come straight back or
-  wait. Throwing means the pass could not finish.
-- `WorkLock` / `LockedWork`: optional leader-lock decorator around any `Work` so only one worker instance
-  executes a pass at a time while others stand by for failover.
-- `RetryStrategy`: what happens after a pass threw - `none()`, `fixed(times)`, `backOff()`, `forever()`.
-  Returning `null` means give up.
-- `Worker`: the loop, in two kinds that differ in **what becomes of a failure the retry strategy gave up on**.
-  - `ManagedWorker` keeps it in: reports it to `onGiveUp` and stops only itself, so one stuck subscription
-    cannot take the application or the other workers with it. Owns its coroutine - nothing of that machinery
-    is visible from outside - and has `start()` / `stop(timeout)`.
-  - `UnmanagedWorker` lets it out. For a process whose only job this is, where dying with the exception and a
-    non-zero exit code is right, and swallowing it would leave something that looks alive and does nothing.
+## Installation
+
+Add the dependency in `build.gradle.kts` (with `id("io.kmpkt.di")` applied, `WorkerComponent` is discovered automatically):
+
+```kotlin
+dependencies {
+    implementation("io.kmpkt:kmpkt-worker:0.1.0")
+}
+```
+
+## DI Setup
+
+Discover `Work` implementations in `src/di/kotlin`; `WorkerComponent` automatically tags them with `WorkTag` and registers a `ManagedWorker` for each:
+
+```kotlin
+// src/di/kotlin/AppConfiguration.kt
+import io.kmpkt.di.compiler.Configuration
+import io.kmpkt.di.compiler.ContainerBuilder
+import io.kmpkt.worker.Work
+
+class AppConfiguration : Configuration<MyApp> {
+    override fun ContainerBuilder.configure() {
+        discover("com.example.app") {
+            services<Work>()
+        }
+    }
+}
+```
 
 ## Usage
 
-```kotlin
-// in the background of an application, next to others
-val worker = ManagedWorker("async-transport", TransportWork(transport, "async", bus, logger), logger)
-worker.start()
-// on shutdown
-worker.stop(timeout = 10.seconds)
+Implement `Work` in `src/main/kotlin` and inject `List<ManagedWorker>` (or run `ManagedWorker` / `UnmanagedWorker` standalone):
 
-// or as a CLI command, in the foreground, until killed
-runBlocking { UnmanagedWorker("projections", work, logger).run() }
+```kotlin
+// src/main/kotlin/OutboxWork.kt
+import io.kmpkt.worker.ManagedWorker
+import io.kmpkt.worker.Work
+
+class OutboxWork : Work {
+    override suspend fun run(): Int {
+        // Poll and process items; return the count handled
+        return 0
+    }
+}
+
+class WorkerLifecycle(private val workers: List<ManagedWorker>) {
+    fun startAll() = workers.forEach { it.start() }
+}
 ```
 
-Those two entry points are the point: the same `Work` runs as a background task inside an application or as
-its own process, without being written twice.
+For standalone usage without DI:
 
-`stop()` asks the loop to finish its current pass before stopping, and cancels it where it stands if that takes
-longer than the timeout. The graceful part is the attempt, not a promise: a pass is where a subscriber is
-halfway through something - an event handled but its position not yet saved, an HTTP call in flight - and
-cutting that short is safe but wasteful, since the work is simply done again. Which is why subscribers have to
-be idempotent either way.
+```kotlin
+val managed = createManagedWorker(
+    name = "outbox",
+    work = OutboxWork(),
+    pollInterval = 1.seconds,
+    retry = RetryStrategy.backOff(times = 5),
+)
+managed.start()
 
-## Failure
+// Or foreground execution (throws on exhausted retries):
+UnmanagedWorker("outbox", OutboxWork(), logger).run()
+```
 
-A pass that handled something resets the attempt count, so an occasional hiccup never accumulates towards
-giving up. When the strategy does give up, the worker **stops and rethrows** rather than carrying on - a
-subscription stuck on an event it cannot handle will not un-stick itself, and a worker that retries forever
-turns a loud failure into log lines nobody reads.
+## Extending
 
-Failures a pass knows how to handle belong inside the pass. `TransportWork` rejects a single bad message and
-carries on with the batch, and only lets a failure of the transport itself reach the worker.
+### Custom `RetryStrategy`
 
-## `ApplicationRunner` vs. `Worker`
+Implement `RetryStrategy` to customize backoff or stop conditions based on the attempt count, returning `null` to stop retrying:
 
-`WorkerComponent` turns every registered `Work` into a `Worker` (`ManagedWorker`), but does **not**
-start it automatically during `KmpKt.run()`:
+```kotlin
+class CappedRetryStrategy(private val maxAttempts: Int) : RetryStrategy {
+    override fun delayBefore(attempt: Int): Duration? =
+        if (attempt <= maxAttempts) 5.seconds else null
+}
+```
 
-- **`ApplicationRunner`** starts the **process** automatically (`KmpKt.run<App>(args)`).
-- **`Worker`** is a **background loop** whose lifecycle is owned by a host:
-  - [`kmpkt-ktor-bridge`](../kmpkt-ktor-bridge): `KtorServer` automatically starts and stops all
-    `Worker` services alongside HTTP routes.
-  - [`kmpkt-clikt-bridge`](../kmpkt-clikt-bridge): a dedicated `CliktCommand` injects a `Worker`
-    and runs it only when that subcommand is invoked.
-  - **Standalone:** a startup `ApplicationRunner` calls `start()` (see
-    [`examples/messenger`](../examples/messenger)).
+### Distributed locking
+
+Implement `WorkLock` (for example with database advisory locks or Redis) and wrap `Work` in `LockedWork` for single-active-worker execution:
+
+```kotlin
+class RedisWorkLock : WorkLock {
+    override suspend fun <R> underLock(name: String, block: suspend () -> R): R? =
+        if (tryAcquire(name)) try { block() } finally { release(name) } else null
+}
+```
+
+### Worker tags
+
+Tag `Work` implementations with `WorkTag` in `src/di/kotlin` to control registration or inject all generated workers via `ManagedWorkerTag`:
+
+```kotlin
+service<OutboxWork> {
+    tag(WorkTag)
+}
+```
