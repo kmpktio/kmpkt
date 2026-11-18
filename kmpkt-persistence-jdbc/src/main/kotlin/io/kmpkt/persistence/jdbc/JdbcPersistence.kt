@@ -20,6 +20,7 @@ public class JdbcPersistence(
 ) : Persistence {
     private val coroutineLocks = mutableMapOf<String, Mutex>()
     private val guard = Mutex()
+    private val schemaFuse = Fuse()
 
     private val advisoryLocks: Boolean by lazy {
         dataSource.connection.use { it.metaData.databaseProductName.equals("PostgreSQL", ignoreCase = true) }
@@ -29,7 +30,15 @@ public class JdbcPersistence(
 
     override fun appendLog(name: String): AppendLog = JdbcAppendLog(dataSource, name)
 
-    override fun workQueue(name: String): WorkQueue = JdbcWorkQueue(dataSource, name)
+    override fun workQueue(name: String): WorkQueue = JdbcWorkQueue(dataSource, name, schemaFuse)
+
+    override suspend fun setup() {
+        schemaFuse.runOnce {
+            withContext(Dispatchers.IO) {
+                PersistenceSchema.migrate(dataSource)
+            }
+        }
+    }
 
     override suspend fun <R> inTransaction(block: suspend () -> R): R = dataSource.inTransaction { block() }
 

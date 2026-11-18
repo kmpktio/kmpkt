@@ -14,6 +14,7 @@ import io.kmpkt.di.compiler.fixture.parameter
 import io.kmpkt.di.compiler.typeRef
 import io.kmpkt.messenger.bus.MessengerCatalog
 import io.kmpkt.messenger.clikt.ConsumeCommand
+import io.kmpkt.messenger.clikt.SetupTransportsCommand
 import io.kmpkt.messenger.di.MessengerComponent
 import io.kmpkt.messenger.di.fixture.declareMessenger
 import io.kmpkt.messenger.di.messenger
@@ -35,6 +36,10 @@ class MessengerCliktComponentTest :
                         parameter<MessengerCatalog>("catalog"),
                         parameter<Logger>("logger", hasDefault = true),
                         parameter<WorkLock?>("workLock", hasDefault = true),
+                        supertypes = listOf(typeRef<CliktCommand>()),
+                    )
+                    declare<SetupTransportsCommand>(
+                        parameter<MessengerCatalog>("catalog"),
                         supertypes = listOf(typeRef<CliktCommand>()),
                     )
                     declare<CliktRootCommand>(
@@ -67,5 +72,7 @@ class MessengerCliktComponentTest :
             compiled.shouldNotBeNull()
             val consumeId = compiled.definitions.first { it.type == typeRef<ConsumeCommand>() }.id
             compiled.definition(consumeId).type shouldBe typeRef<ConsumeCommand>()
+            val setupId = compiled.definitions.first { it.type == typeRef<SetupTransportsCommand>() }.id
+            compiled.definition(setupId).type shouldBe typeRef<SetupTransportsCommand>()
         }
     })

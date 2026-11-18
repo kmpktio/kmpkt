@@ -24,6 +24,11 @@ public interface Persistence {
         name: String,
         block: suspend () -> R,
     ): R?
+
+    /**
+     * Provisions any backing schema or resources needed by this backend. Default is a no-op.
+     */
+    public suspend fun setup() {}
 }
 
 public fun createKeyValueStore(
