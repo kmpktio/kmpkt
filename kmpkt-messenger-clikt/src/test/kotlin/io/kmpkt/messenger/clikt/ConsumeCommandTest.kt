@@ -112,6 +112,9 @@ class ConsumeCommandTest :
             shouldThrow<CliktError> {
                 ConsumeCommand(catalog).parse(listOf("unknown"))
             }
+            shouldThrow<CliktError> {
+                ConsumeCommand(catalog).parse(listOf("queue", "--all"))
+            }
         }
 
         test("stops after --failure-limit failed messages") {

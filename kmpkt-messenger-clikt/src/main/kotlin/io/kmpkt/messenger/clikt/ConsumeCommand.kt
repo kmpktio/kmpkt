@@ -105,6 +105,7 @@ public class ConsumeCommand(
 
     private fun resolveTransports() =
         when {
+            all && receivers.isNotEmpty() -> throw UsageError("Cannot specify both transport receivers and --all.")
             all -> {
                 if (catalog.transports.isEmpty()) throw UsageError("No queued transports are registered.")
                 catalog.transports
