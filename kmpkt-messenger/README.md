@@ -21,6 +21,8 @@ with no event-sourcing or DI-framework knowledge of any kind.
   instead of queueing it - which is what makes inline handling a routing *decision*, and so the only way a
   `RouteStamp` can override a routed message type back to inline: `RouteStamp.Sync`. Nothing is ever queued
   on it, so its `receive`/`ack`/`reject` throw rather than quietly doing nothing.
+  Transports that own external or durable infrastructure can implement `SetupableTransport` (`setup()`)
+  so `messenger:setup-transports` can provision them idempotently ahead of consumption.
 - `AddBusNameStampMiddleware`: stamps envelopes with `BusNameStamp` on their entry bus so workers
   and replays know which bus originally dispatched them.
 - `FailedMessageProcessingMiddleware`: restores the original `ReceivedStamp` from

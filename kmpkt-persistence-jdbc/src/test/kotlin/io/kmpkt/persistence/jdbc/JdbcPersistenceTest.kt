@@ -8,6 +8,7 @@ import io.kotest.matchers.collections.shouldBeEmpty
 import io.kotest.matchers.collections.shouldHaveSize
 import io.kotest.matchers.nulls.shouldBeNull
 import io.kotest.matchers.shouldBe
+import java.nio.file.Files
 import java.time.Instant
 
 class JdbcPersistenceTest :
@@ -120,5 +121,30 @@ class JdbcPersistenceTest :
                 store.get("k") shouldBe "before"
                 log.latestPosition() shouldBe 0L
             }
+        }
+
+        test("setup provisions the Flyway schema idempotently") {
+            val dbFile = Files.createTempFile("kmpkt-setup-", ".db").toFile().apply { deleteOnExit() }
+            val dataSource = DataSourceFactory.create(PersistenceConfig("jdbc:sqlite:${dbFile.absolutePath}"))
+            val persistence = JdbcPersistence(dataSource)
+
+            persistence.setup()
+            persistence.setup()
+
+            val queue = persistence.workQueue("jobs")
+            queue.enqueue("j1", "payload", now)
+            queue.claim(now).map { it.id } shouldBe listOf("j1")
+        }
+
+        test("workQueue setup provisions the Flyway schema idempotently") {
+            val dbFile = Files.createTempFile("kmpkt-queue-setup-", ".db").toFile().apply { deleteOnExit() }
+            val dataSource = DataSourceFactory.create(PersistenceConfig("jdbc:sqlite:${dbFile.absolutePath}"))
+            val queue = JdbcPersistence(dataSource).workQueue("jobs")
+
+            queue.setup()
+            queue.setup()
+
+            queue.enqueue("j1", "payload", now)
+            queue.claim(now).map { it.id } shouldBe listOf("j1")
         }
     })

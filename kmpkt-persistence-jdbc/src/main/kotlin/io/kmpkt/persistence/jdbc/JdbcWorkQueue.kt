@@ -2,13 +2,24 @@ package io.kmpkt.persistence.jdbc
 
 import io.kmpkt.persistence.QueuedItem
 import io.kmpkt.persistence.WorkQueue
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import java.time.Instant
 import javax.sql.DataSource
 
 internal class JdbcWorkQueue(
     private val dataSource: DataSource,
     private val queue: String,
+    private val schemaFuse: Fuse = Fuse(),
 ) : WorkQueue {
+    override suspend fun setup() {
+        schemaFuse.runOnce {
+            withContext(Dispatchers.IO) {
+                PersistenceSchema.migrate(dataSource)
+            }
+        }
+    }
+
     override suspend fun enqueue(
         id: String,
         payload: String,

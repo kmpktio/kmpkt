@@ -16,6 +16,8 @@ public data class QueuedItem(
  * Persistent work queue supporting delayed delivery, claiming, acknowledgement, requeuing, and dead-lettering.
  */
 public interface WorkQueue {
+    public suspend fun setup() {}
+
     public suspend fun enqueue(
         id: String,
         payload: String,
