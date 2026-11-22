@@ -8,7 +8,7 @@ Ktor Netty server integration for KmpKt compile-time dependency injection. Colle
 
 | Symbol | Description |
 | --- | --- |
-| `KtorServer` | Embeds Netty via `embeddedServer`, installs `KtorServerPlugin`s and `HttpRoutes`, and binds `ManagedWorker` and `UnmanagedWorker` lifecycles to `ApplicationStarted` and `ApplicationStopping`. |
+| `KtorServer` | Embeds Netty via `embeddedServer`, installs `KtorServerPlugin` and `HttpRoutes` contributions, and binds `ManagedWorker` and `UnmanagedWorker` lifecycles to `ApplicationStarted` and `ApplicationStopping`. |
 | `KtorServerConfig` | Server configuration data class holding the HTTP `port` (default `8080`). |
 | `KtorServerPlugin` | Functional interface for installing application-level Ktor plugins and configuration. |
 | `HttpRoutes` | Functional interface for contributing HTTP routes to Ktor's `Routing`. |

@@ -31,7 +31,7 @@ Pure-Kotlin container model, component SPI, and multi-phase compilation pipeline
 | --- | --- |
 | `BuilderPass` | Functional interface for inspecting or rewriting a `ContainerBuilder` during compilation. |
 | `PassPhase` | Ordered compilation phases: `BeforeOptimization`, `Optimization`, `BeforeRemoving`, `Removing`, and `AfterRemoving`. |
-| `ContainerCompiler`, `CompiledContainer`, `ResolvedEntryPoint` | Executes components in topological order, applies `Configuration`s, runs passes by phase and priority, and emits the compiled container. |
+| `ContainerCompiler`, `CompiledContainer`, `ResolvedEntryPoint` | Executes components in topological order, applies configurations, runs passes by phase and priority, and emits the compiled container. |
 
 ## Installation
 
@@ -65,11 +65,94 @@ class AppConfiguration : Configuration<App> {
 }
 ```
 
+## Container DSL
+
+Inside `Component.register()` and `Configuration.configure()`, `ContainerBuilder` defines what services exist and how they are wired.
+
+### Registering Services
+
+- **`service`** wires a class through its public primary constructor. Services are shared and eager by default.
+- **`factory`** calls a top-level function or an `object` factory method instead of a public constructor, which lets modules keep implementations `internal`.
+- **`external`** declares a dependency passed into the generated container constructor at runtime, such as runtime configuration or database connections.
+
+```kotlin
+service<OrderService>()
+
+factory(::createOrderRepository)
+factory<OrderClock>("com.example.orders", "systemClock") // overloaded factory
+
+external<AppConfig>() // passed as appConfig to the generated container
+```
+
+### Discovering Packages
+
+`discover` scans a package prefix for constructible classes. By default, discovered classes stay lazy and are only checked when reachable from an entry point. Adding `services<T>()` limits discovery to subtypes of `T` and enforces strict compile-time wiring.
+
+```kotlin
+discover("com.example.orders") {
+    services<CommandHandler<*>>()
+    exclude<LegacyOrderHandler>()
+}
+```
+
+### Binding, Decoration and Lifecycles
+
+Every `service`, `factory` and `external` block configures a `DefinitionConfigurator`:
+
+```kotlin
+service<CachingOrderRepository> {
+    decorates<OrderRepository>(priority = 10)
+}
+
+service<PrimaryDataSource> {
+    bind<DataSource>()
+}
+
+factory<DataSource>(::createReplicaDataSource) {
+    named("replica") // autowires parameters named `replica: DataSource`
+}
+
+service<DefaultBus> {
+    argument<List<Middleware>>(tagged<MiddlewareTag>())
+    argument("timeout", env("BUS_TIMEOUT_MS", 5000))
+    lazy()
+}
+```
+
+If a decorator has multiple parameters of the decorated type, mark the wrapped one with `argument("inner", Argument.Inner)`.
+
+Additional options inside `service<T> { ... }`:
+
+| Helper | Effect |
+| --- | --- |
+| `tag(tag)` | Attaches a `Tag` for `tagged<Tag>()` queries. |
+| `prototype()` | Creates a new instance per consumer instead of sharing one. |
+| `lazy()` / `eager()` | Instantiates on first access vs. container startup (`eager()` is default). |
+| `autowired(false)` | Disables constructor autowiring when all arguments are passed manually. |
+| `autoconfigured(false)` | Opts out of `autoconfigure<T>` rules. |
+| `argument(...)` | Passes `service<T>()`, `tagged<Tag>()`, `env(...)`, `literal(...)`, `classLiteral<T>()` or plain constants (`String`, `Boolean`, `Number`, `Duration`, `Enum`). |
+
+### Autoconfiguration and Component Configuration
+
+`autoconfigure<T>` attaches tags to any service assignable to `T`, regardless of which module registered it.
+
+Components that implement `Component<Options>` expose an options builder configured before `register()` runs. Pass both types to `configure` (the second type parameter can be shortened to `_` so Kotlin infers it), or use `prepend` to queue options ahead of existing ones:
+
+```kotlin
+autoconfigure<DomainEventHandler<*>> {
+    tag(EventHandlerTag())
+}
+
+configure<MessengerComponent, MessengerOptions> {
+    bus("command")
+}
+```
+
 ## Extending
 
 ### Feature component
 
-Implement `Component` or `SimpleComponent` in `src/di/kotlin` to contribute module services, options, and autoconfiguration rules:
+Implement `Component` or `SimpleComponent` in `src/di/kotlin` to contribute module services, options and autoconfiguration rules:
 
 ```kotlin
 import io.kmpkt.di.compiler.ContainerBuilder
@@ -107,16 +190,39 @@ import io.kmpkt.di.compiler.Tag
 data class StartupHookTag(override val priority: Int = 0) : Tag
 ```
 
-### Compiler pass
+### Compiler passes
 
-Implement `BuilderPass` and register it with `addPass` to inspect or rewrite definitions during a specific compilation phase:
+`ContainerCompiler` runs `Component` registrations in dependency order (`requires`), applies `Configuration` overrides and then executes all passes across five ordered `PassPhase` stages.
+
+In each phase, both built-in passes and custom `BuilderPass` instances registered via `addPass(pass, phase, priority)` run together, ordered highest `priority` first (defaults: `PassPhase.BeforeOptimization`, `priority = 0`):
+
+```mermaid
+flowchart LR
+    C["Components & Configurations"] --> B["BeforeOptimization"]
+    B --> O["Optimization"]
+    O --> BR["BeforeRemoving"]
+    BR --> R["Removing"]
+    R --> AR["AfterRemoving"]
+```
+
+| Phase | Built-in passes (`priority`) and custom `addPass` timing |
+| --- | --- |
+| `BeforeOptimization` | Built-in `autoconfigure<T>` (`100`). Ideal for custom passes that register, tag or adjust definitions before wiring starts. |
+| `Optimization` | Built-in wiring: typed arguments, decorators, constructor autowiring, `tagged<Tag>()` resolution, aliases and reference checks (`0`). Use `priority > 0` to run before built-in wiring, or `< 0` right after. |
+| `BeforeRemoving` | No built-in passes. Runs after all wiring and reference checks, before unreachable services are removed. |
+| `Removing` | Built-in cleanup: removes unused services, reports definition errors and inlines single-use definitions (`0`). |
+| `AfterRemoving` | No built-in passes. Final inspection of the pruned container graph right before code generation. |
+
+Inside a `BuilderPass`, inspect or rewrite definitions with `find<T>()`, `tagged<Tag>()`, `update<T>()`, `remove(id)` and `alias(key, id)`:
 
 ```kotlin
 import io.kmpkt.di.compiler.BuilderPass
 import io.kmpkt.di.compiler.PassPhase
 
 val auditPass = BuilderPass { container ->
-    // inspect or modify container definitions
+    container.tagged<StartupHookTag>().forEach { entry ->
+        // inspect or update entry.definition
+    }
 }
-container.addPass(auditPass, PassPhase.BeforeOptimization, priority = 10)
+addPass(auditPass, PassPhase.BeforeOptimization, priority = 10)
 ```

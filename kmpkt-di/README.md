@@ -22,7 +22,9 @@ plugins {
 
 ## Usage
 
-Define your `KmpKtApplication` marker and `ApplicationRunner` implementations in `core/src/main/kotlin`, wire them in `core/src/di/kotlin` with `Configuration<TodoApp>`, and launch from a downstream `app` module in `app/src/main/kotlin`:
+Define your `KmpKtApplication` marker and `ApplicationRunner` implementations in `core/src/main/kotlin`, wire them in `core/src/di/kotlin` with `Configuration<TodoApp>`, and launch from a downstream `app` module in `app/src/main/kotlin`.
+
+For registering services (`service`, `factory`, `external`, `discover`), decorators, tags and components inside `src/di/kotlin`, see the [`kmpkt-di-compiler-api` Container DSL](../kmpkt-di-compiler-api/README.md#container-dsl).
 
 ```kotlin
 // core/src/main/kotlin/TodoRunner.kt

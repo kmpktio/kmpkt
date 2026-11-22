@@ -32,4 +32,4 @@ kmpktDi {
 }
 ```
 
-For the module boundary between `core/src/di/kotlin` and `app`, see [`kmpkt-di`](../kmpkt-di/README.md). For the DSL used inside `src/di/kotlin`, see [`kmpkt-di-compiler-api`](../kmpkt-di-compiler-api/README.md).
+For the module boundary between `core/src/di/kotlin` and `app`, see [`kmpkt-di`](../kmpkt-di/README.md). For the [Container DSL](../kmpkt-di-compiler-api/README.md#container-dsl) used inside `src/di/kotlin`, see [`kmpkt-di-compiler-api`](../kmpkt-di-compiler-api/README.md).

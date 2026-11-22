@@ -19,4 +19,4 @@ dependencies {
 }
 ```
 
-For the DI DSL and extension points compiled by this processor, see [`kmpkt-di-compiler-api`](../kmpkt-di-compiler-api/README.md).
+For the [Container DSL](../kmpkt-di-compiler-api/README.md#container-dsl) and extension points compiled by this processor, see [`kmpkt-di-compiler-api`](../kmpkt-di-compiler-api/README.md).
