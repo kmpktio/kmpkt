@@ -12,6 +12,10 @@ KmpKt combines the architecture of Symfony DependencyInjection (compiler passes,
 
 See [Why KmpKt?](docs/why.md) for the full background and credits to Fabien Potencier and the Symfony team.
 
+## Platform & Roadmap
+
+Even though the name suggests Kotlin Multiplatform, KmpKt currently targets **JVM only**. Once the core APIs stabilize, the plan is to port the runtime modules to Kotlin Multiplatform so the Messenger and Outbox Relay can also power reliable mobile-to-backend communication.
+
 ## Gradle Setup
 
 `kmpkt` is currently published to GitHub Packages. Add the repository to
