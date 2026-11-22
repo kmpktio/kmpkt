@@ -6,6 +6,12 @@
 in Kotlin. Commands, queries, events, aggregates, policies, projections, and background workers
 are wired at compile time with zero runtime reflection.
 
+## Why KmpKt?
+
+KmpKt combines the architecture of Symfony DependencyInjection (compiler passes, tagging, decoration) and Symfony Messenger (envelopes, stamps, buses, middleware, transports) with Kotlin's type safety, coroutines and compile-time KSP code generation. It is built for modular monoliths, from simple CQRS to full event sourcing.
+
+See [Why KmpKt?](docs/why.md) for the full background and credits to Fabien Potencier and the Symfony team.
+
 ## Gradle Setup
 
 `kmpkt` is currently published to GitHub Packages. Add the repository to
@@ -105,6 +111,7 @@ fun main(args: Array<String>) = KmpKt.run<TodoApp>(args)
 ## Documentation
 
 - [Documentation Index](docs/README.md)
+- [Why KmpKt?](docs/why.md)
 - [Getting Started with Gradle](docs/getting-started.md)
 - [Module Guide](docs/modules.md)
 - [CQRS & Event Sourcing Architecture](docs/cqrs-and-event-sourcing.md)
