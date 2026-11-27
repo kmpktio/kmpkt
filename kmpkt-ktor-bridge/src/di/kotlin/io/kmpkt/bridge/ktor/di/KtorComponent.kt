@@ -8,12 +8,9 @@ import io.kmpkt.di.compiler.Component
 import io.kmpkt.di.compiler.ContainerBuilder
 import io.kmpkt.di.compiler.ServiceId
 import io.kmpkt.di.compiler.Tag
-import io.kmpkt.worker.Worker
 import io.kmpkt.di.compiler.tagged as taggedArgument
 
 public object HttpRoutesTag : Tag
-
-public object WorkerTag : Tag
 
 public object KtorPluginTag : Tag
 
@@ -22,7 +19,6 @@ public class KtorComponent : Component<KtorOptions> {
 
     override fun ContainerBuilder.prepare() {
         autoconfigure<HttpRoutes> { tag(HttpRoutesTag) }
-        autoconfigure<Worker> { tag(WorkerTag) }
         autoconfigure<KtorServerPlugin> { tag(KtorPluginTag) }
     }
 
@@ -37,7 +33,6 @@ public class KtorComponent : Component<KtorOptions> {
         }
         service<KtorServer> {
             argument("routes", taggedArgument<HttpRoutesTag>())
-            argument("workers", taggedArgument<WorkerTag>())
             argument("plugins", taggedArgument<KtorPluginTag>())
         }
     }

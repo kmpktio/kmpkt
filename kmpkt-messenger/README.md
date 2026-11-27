@@ -6,7 +6,7 @@ Core message bus, envelope and stamp model, middleware pipeline, transport routi
 
 ### Buses & Catalog
 
-| Symbol | Purpose |
+| Symbol | Description |
 | --- | --- |
 | `MessageBus` | Core bus interface for dispatching, sending, and asking messages |
 | `DefaultMessageBus` | Executes an ordered `Middleware` chain |
@@ -15,7 +15,7 @@ Core message bus, envelope and stamp model, middleware pipeline, transport routi
 
 ### Messages, Handlers & Exceptions
 
-| Symbol | Purpose |
+| Symbol | Description |
 | --- | --- |
 | `Message`, `MessageHandler`, `Envelope`, `Stamp` | Core message, handler, envelope wrapper, and metadata marker types |
 | `HandlerPolicy`, `HandlerRegistry`, `DefaultHandlerRegistry` | Handler lookup and single-vs-multiple invocation policies |
@@ -23,11 +23,11 @@ Core message bus, envelope and stamp model, middleware pipeline, transport routi
 
 ### Middlewares
 
-| Symbol | Purpose |
+| Symbol | Description |
 | --- | --- |
 | `Middleware`, `MiddlewareChain` | Intercepts envelope dispatch before and after downstream execution |
 | `AddBusNameStampMiddleware` | Attaches `BusNameStamp` if absent |
-| `SendMessageMiddleware` | Routes envelopes via `RouteStamp` or `TransportRegistry` when not already received |
+| `SendMessageMiddleware` | Routes outbound envelopes via `TransportRouter` when not already carrying `ReceivedStamp` |
 | `FailedMessageProcessingMiddleware` | Restores `ReceivedStamp` when re-consuming from a failure transport |
 | `RetryMiddleware` | Re-queues failed envelopes with `RedeliveryStamp` and `DelayStamp` |
 | `HandleMessageMiddleware` | Invokes matching handlers under `HandlerPolicy` and attaches `HandledStamp` |
@@ -37,26 +37,27 @@ Core message bus, envelope and stamp model, middleware pipeline, transport routi
 
 ### Stamps
 
-| Symbol | Purpose |
+| Symbol | Description |
 | --- | --- |
-| `AsyncStamp`, `BusNameStamp`, `DelayStamp`, `DispatchAfterCurrentBusStamp`, `DispatchedStamp`, `RateLimitedStamp`, `ReceivedStamp`, `RedeliveryStamp`, `SentToFailureTransportStamp` | Built-in routing, scheduling, retry, and lifecycle metadata |
+| `AsyncStamp`, `BusNameStamp`, `DelayStamp`, `DispatchAfterCurrentBusStamp`, `DispatchedStamp`, `ErrorDetailsStamp`, `RateLimitedStamp`, `ReceivedStamp`, `RedeliveryStamp`, `SentToFailureTransportStamp` | Built-in routing, scheduling, retry, error, and lifecycle metadata |
 | `HandledStamp` | Records handler execution and return values |
-| `RouteStamp`, `SentStamp` | Records explicit transport routing and delivery |
+| `RouteStamp`, `SentStamp` | Per-envelope routing override (`transportName: String`) and outbound delivery metadata |
 
-### Transports, Retries & Worker
+### Transports, Routing, Retries & Worker
 
-| Symbol | Purpose |
+| Symbol | Description |
 | --- | --- |
 | `Transport`, `SyncTransport`, `InMemoryTransport`, `ListableTransport`, `QueuedEnvelope`, `SetupableTransport`, `TransportFactory` | Transport abstractions and built-in sync/in-memory implementations |
-| `TransportRegistry`, `DefaultTransportRegistry` | Maps message types to target transports |
+| `TransportRegistry`, `DefaultTransportRegistry` | Resolves registered `Transport` instances by `name` |
+| `TransportRouter`, `DefaultTransportRouter`, `RoutedTransport` | Selects and resolves the target `Transport` for an outbound `Envelope` from `RouteStamp`, message routes, and bus fallback |
 | `RetryStrategy`, `MultiplierRetryStrategy`, `RetryDecider`, `RecoverableException`, `UnrecoverableException`, `RetryScheduledException` | Retry policies, backoff strategies, and exception classification |
 | `TransportWork` | `Work` implementation polling prioritized transports onto `MessageBus` |
 
 ### DI Configuration
 
-| Symbol | Purpose |
+| Symbol | Description |
 | --- | --- |
-| `MessengerComponent`, `messenger`, `MessengerOptions`, `BusRef`, `TransportRef`, `TransportOptions`, `StrategyOptions`, `BusOptions`, `DefaultMiddlewareOptions`, `MessageHandlerTag`, `HandlerRegistryTag` | Compile-time DI component, DSL configuration, and handler tags |
+| `MessengerComponent`, `messenger`, `MessengerOptions`, `BusRef`, `TransportRef`, `TransportOptions`, `StrategyOptions`, `BusOptions`, `DefaultMiddlewareOptions`, `MessageHandlerTag`, `HandlerRegistryTag` | Compile-time DI component, DSL configuration, type-safe references, and handler tags |
 | `RegisterMessageHandlersPass` | `BuilderPass` that wires tagged handlers into each bus's `HandlerRegistry` |
 
 ## Installation
@@ -71,10 +72,11 @@ dependencies {
 
 ## DI Setup
 
-Configure transports, retry strategies, routing, and buses in `src/di/kotlin`:
+Configure transports, retry strategies, routing, and buses in `src/di/kotlin` using the returned `TransportRef` and `BusRef` handles:
 
 ```kotlin
 // src/di/kotlin/AppConfiguration.kt
+import com.example.app.Greet
 import io.kmpkt.di.compiler.Configuration
 import io.kmpkt.di.compiler.ContainerBuilder
 import io.kmpkt.messenger.di.delay
@@ -154,6 +156,15 @@ val bus = DefaultMessageBus(
 bus.send(Greet("world"))
 ```
 
+### Consuming queued transports
+
+Choose one of two ways to process messages routed to a queued transport:
+
+- **Dedicated CLI worker process (`kmpkt-messenger-clikt` + `kmpkt-clikt-bridge`):** Add both modules and run `app messenger:consume async`. No custom `Work` service is needed.
+- **In-process background worker (`kmpkt-worker`):** Register a `TransportWork` service for `AsyncTransport` and enable `workers { autoStart = true }` so `WorkerRunner` runs it alongside your application.
+
+Write a custom `Work` implementation instead of `TransportWork` only when you need custom batching, parallel per-partition polling, or domain-specific backpressure.
+
 ## Extending
 
 ### Custom `Middleware`
@@ -185,7 +196,7 @@ fun Envelope.correlationId(): String? = last<CorrelationStamp>()?.correlationId
 
 ### Custom `Transport`
 
-Implement `Transport` (and optionally `SetupableTransport` or `ListableTransport`), then register it with `transport<CustomTransport>("name")`:
+Implement `Transport` (and optionally `SetupableTransport` or `ListableTransport`), and register it with `transport<CustomTransport>("custom")`:
 
 ```kotlin
 class CustomTransport : Transport {

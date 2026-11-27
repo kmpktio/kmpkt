@@ -1,7 +1,7 @@
 package io.kmpkt.example.messenger.outbound.transport
 
 import io.kmpkt.messenger.message.Envelope
-import io.kmpkt.messenger.stamp.SentToFailureTransportStamp
+import io.kmpkt.messenger.stamp.ErrorDetailsStamp
 import io.kmpkt.messenger.transport.InMemoryTransport
 import io.kmpkt.messenger.transport.Transport
 import org.slf4j.Logger
@@ -15,7 +15,7 @@ class ObservableInMemoryTransport(
     private val delegate: InMemoryTransport = InMemoryTransport(),
 ) : Transport by delegate {
     override suspend fun send(envelope: Envelope): Envelope {
-        envelope.last<SentToFailureTransportStamp>()?.failure?.let { failure ->
+        envelope.last<ErrorDetailsStamp>()?.exceptionClass?.let { failure ->
             logger.error("dead-letter: $failure")
         }
         return delegate.send(envelope)

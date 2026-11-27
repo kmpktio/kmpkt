@@ -13,7 +13,7 @@ class FailedMessageProcessingMiddlewareTest :
             val middleware = FailedMessageProcessingMiddleware("dead-letter")
             val envelope =
                 Envelope(Greet("Milch"))
-                    .with(SentToFailureTransportStamp("async-jobs", "IllegalStateException", "boom"))
+                    .with(SentToFailureTransportStamp("async-jobs"))
                     .with(ReceivedStamp("dead-letter"))
             var forwarded: Envelope? = null
 
@@ -33,7 +33,7 @@ class FailedMessageProcessingMiddlewareTest :
 
             val normal =
                 Envelope(Greet("Milch"))
-                    .with(SentToFailureTransportStamp("async-jobs", "IllegalStateException", "boom"))
+                    .with(SentToFailureTransportStamp("async-jobs"))
                     .with(ReceivedStamp("async-jobs"))
             middleware.handle(normal) { it } shouldBe normal
 

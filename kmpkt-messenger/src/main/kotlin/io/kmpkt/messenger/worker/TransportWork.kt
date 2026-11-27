@@ -4,8 +4,8 @@ import io.kmpkt.messenger.bus.MessageBus
 import io.kmpkt.messenger.message.Envelope
 import io.kmpkt.messenger.retry.RetryScheduledException
 import io.kmpkt.messenger.stamp.ReceivedStamp
-import io.kmpkt.messenger.stamp.SentToFailureTransportStamp
 import io.kmpkt.messenger.transport.Transport
+import io.kmpkt.messenger.transport.putAside
 import io.kmpkt.worker.Work
 import org.slf4j.Logger
 
@@ -74,13 +74,9 @@ public class TransportWork(
         envelope: Envelope,
         failure: Exception,
     ) {
-        val failureTransport = failureTransports[transportName] ?: defaultFailureTransport
+        val failureTransport = failureTransports[transportName] ?: defaultFailureTransport ?: return
         // Not twice: a message that fails again while the failure transport itself is being consumed stays
         // rejected there, instead of being fed back into the queue it just came out of.
-        if (failureTransport == null || envelope.last<SentToFailureTransportStamp>() != null) return
-
-        failureTransport.send(
-            envelope.with(SentToFailureTransportStamp(transportName, failure::class.simpleName ?: "Unknown", failure.message)),
-        )
+        failureTransport.putAside(transportName, envelope, failure)
     }
 }

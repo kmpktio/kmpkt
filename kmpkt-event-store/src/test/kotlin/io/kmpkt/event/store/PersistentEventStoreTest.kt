@@ -34,57 +34,77 @@ private class InMemoryCounterSerializer : EventSerializer {
 
 class PersistentEventStoreTest :
     FunSpec({
-        test("appends, loads streams with fromVersion and limit, and ignores empty appends") {
-            // Arrange
+        test("ignores empty appends without advancing latestPosition") {
+            val store = PersistentEventStore(InMemoryPersistence(), InMemoryCounterSerializer())
+            val id = AggregateUuid.generate<Counter>()
+
+            store.append(Counter.TYPE, id, 0, emptyList())
+
+            store.latestPosition() shouldBe 0L
+        }
+
+        test("appends and loads aggregate stream slices by fromVersion and limit") {
             val store = PersistentEventStore(InMemoryPersistence(), InMemoryCounterSerializer())
             val id = AggregateUuid.generate<Counter>()
             val events = Counter.new(id).apply { repeat(4) { increment(fixedClock) } }.pullRecordedEvents()
 
-            // Act
-            store.append(Counter.TYPE, id, 0, emptyList())
-            store.latestPosition() shouldBe 0L
-
             store.append(Counter.TYPE, id, 0, events)
 
-            // Assert
             store.load(Counter.TYPE, id) shouldContainExactly events
             store.load(Counter.TYPE, id, fromVersion = 1, limit = 2).map { it.version } shouldContainExactly listOf(2L, 3L)
+        }
+
+        test("loads global event feed after position up to limit") {
+            val store = PersistentEventStore(InMemoryPersistence(), InMemoryCounterSerializer())
+            val id = AggregateUuid.generate<Counter>()
+            val events = Counter.new(id).apply { repeat(4) { increment(fixedClock) } }.pullRecordedEvents()
+            store.append(Counter.TYPE, id, 0, events)
+
             store.loadFrom(after = 1, limit = 2).map { it.position to it.event.version } shouldContainExactly
                 listOf(2L to 2L, 3L to 3L)
             store.latestPosition() shouldBe 4L
         }
 
         test("translates LogVersionConflictException into ConcurrencyConflict") {
-            // Arrange
             val store = PersistentEventStore(InMemoryPersistence(), InMemoryCounterSerializer())
             val id = AggregateUuid.generate<Counter>()
             val events = Counter.new(id).apply { increment(fixedClock) }.pullRecordedEvents()
             store.append(Counter.TYPE, id, 0, events)
 
-            // Act + Assert
             shouldThrow<ConcurrencyConflict> {
                 store.append(Counter.TYPE, id, expectedVersion = 0, events)
             }
         }
 
-        test("checkpoint events truncate stream loading and are excluded from global feed") {
-            // Arrange
-            val persistence = InMemoryPersistence()
+        test("truncates stream loading at checkpoint events and excludes them from global feed") {
             val checkpointAtV2 = EventCheckpointPredicate { it.version == 2L }
-            val store = PersistentEventStore(persistence, InMemoryCounterSerializer(), checkpointAtV2)
+            val store = PersistentEventStore(InMemoryPersistence(), InMemoryCounterSerializer(), checkpointAtV2)
             val id = AggregateUuid.generate<Counter>()
             val events = Counter.new(id).apply { repeat(3) { increment(fixedClock) } }.pullRecordedEvents()
 
-            // Act
             store.append(Counter.TYPE, id, 0, events)
 
-            // Assert
             store.load(Counter.TYPE, id).map { it.version } shouldContainExactly listOf(2L, 3L)
             store.loadFrom(after = 0, limit = 10).map { it.event.version } shouldContainExactly listOf(1L, 3L)
             store.latestPosition() shouldBe 3L
+        }
 
-            val emptyStore = PersistentEventStore(InMemoryPersistence(), InMemoryCounterSerializer())
-            emptyStore.load(Counter.TYPE, id).shouldBeEmpty()
-            NoOpEventCheckpointPredicate().isCheckpoint(events.first()) shouldBe false
+        test("returns empty list when loading an unknown aggregate stream") {
+            val store = PersistentEventStore(InMemoryPersistence(), InMemoryCounterSerializer())
+            val id = AggregateUuid.generate<Counter>()
+
+            store.load(Counter.TYPE, id).shouldBeEmpty()
+        }
+
+        test("NoOpEventCheckpointPredicate marks no event as checkpoint") {
+            val id = AggregateUuid.generate<Counter>()
+            val event =
+                Counter
+                    .new(id)
+                    .apply { increment(fixedClock) }
+                    .pullRecordedEvents()
+                    .first()
+
+            NoOpEventCheckpointPredicate().isCheckpoint(event) shouldBe false
         }
     })

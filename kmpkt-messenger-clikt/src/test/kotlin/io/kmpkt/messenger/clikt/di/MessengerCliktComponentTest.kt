@@ -30,7 +30,7 @@ import org.slf4j.Logger
 
 class MessengerCliktComponentTest :
     FunSpec({
-        test("registers ConsumeCommand and wires it into CliktRootCommand") {
+        test("registers messenger CLI commands and wires them into CliktRootCommand") {
             val types =
                 FakeTypeOracle().apply {
                     declareMessenger()
@@ -85,9 +85,10 @@ class MessengerCliktComponentTest :
 
             diagnostics.errors shouldBe emptyList()
             compiled.shouldNotBeNull()
-            val consumeId = compiled.definitions.first { it.type == typeRef<ConsumeCommand>() }.id
-            compiled.definition(consumeId).type shouldBe typeRef<ConsumeCommand>()
-            val setupId = compiled.definitions.first { it.type == typeRef<SetupTransportsCommand>() }.id
-            compiled.definition(setupId).type shouldBe typeRef<SetupTransportsCommand>()
+            compiled.definitions.any { it.type == typeRef<ConsumeCommand>() } shouldBe true
+            compiled.definitions.any { it.type == typeRef<SetupTransportsCommand>() } shouldBe true
+            compiled.definitions.any { it.type == typeRef<ShowFailedCommand>() } shouldBe true
+            compiled.definitions.any { it.type == typeRef<RetryFailedCommand>() } shouldBe true
+            compiled.definitions.any { it.type == typeRef<RemoveFailedCommand>() } shouldBe true
         }
     })

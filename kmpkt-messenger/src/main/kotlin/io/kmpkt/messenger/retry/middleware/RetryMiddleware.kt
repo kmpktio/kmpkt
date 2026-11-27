@@ -7,6 +7,7 @@ import io.kmpkt.messenger.retry.RetryDecider
 import io.kmpkt.messenger.retry.RetryScheduledException
 import io.kmpkt.messenger.retry.RetryStrategy
 import io.kmpkt.messenger.stamp.DelayStamp
+import io.kmpkt.messenger.stamp.ErrorDetailsStamp
 import io.kmpkt.messenger.stamp.ReceivedStamp
 import io.kmpkt.messenger.stamp.RedeliveryStamp
 import io.kmpkt.messenger.transport.Transport
@@ -42,7 +43,7 @@ public class RetryMiddleware(
             val retryCount = RedeliveryStamp.retryCountOf(envelope) + 1
             val delay = strategy.waitingTime(envelope, failure)
             logger.warn("Retrying a message from transport '{}' in {}, retry #{}", transportName, delay, retryCount, failure)
-            transport.send(envelope.with(RedeliveryStamp(retryCount), DelayStamp(delay)))
+            transport.send(envelope.with(RedeliveryStamp(retryCount), DelayStamp(delay), ErrorDetailsStamp.from(failure)))
             throw RetryScheduledException(failure)
         }
     }

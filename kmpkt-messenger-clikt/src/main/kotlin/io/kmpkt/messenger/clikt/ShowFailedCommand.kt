@@ -9,6 +9,7 @@ import com.github.ajalt.clikt.parameters.options.option
 import com.github.ajalt.clikt.parameters.types.int
 import com.github.ajalt.clikt.parameters.types.restrictTo
 import io.kmpkt.messenger.bus.MessengerCatalog
+import io.kmpkt.messenger.stamp.ErrorDetailsStamp
 import io.kmpkt.messenger.stamp.RedeliveryStamp
 import io.kmpkt.messenger.stamp.SentToFailureTransportStamp
 import kotlinx.coroutines.flow.take
@@ -40,12 +41,15 @@ public class ShowFailedCommand(
                     failureTransport.find(targetId)
                         ?: throw UsageError("Failed message '$targetId' was not found.")
                 val stamp = entry.envelope.last<SentToFailureTransportStamp>()
+                val error = entry.envelope.last<ErrorDetailsStamp>()
                 val redelivery = entry.envelope.last<RedeliveryStamp>()
                 echo("ID: ${entry.id}")
                 echo("Message: ${entry.envelope.message::class.simpleName}")
                 if (stamp != null) {
                     echo("Origin: ${stamp.originalTransportName}")
-                    echo("Error: ${stamp.failure}: ${stamp.failureMessage ?: ""}")
+                }
+                if (error != null) {
+                    echo("Error: ${error.exceptionClass}: ${error.exceptionMessage.orEmpty()}")
                 }
                 if (redelivery != null) {
                     echo("Retries: ${redelivery.retryCount}")
@@ -57,8 +61,13 @@ public class ShowFailedCommand(
                     echo("No failed messages found.")
                 } else {
                     entries.forEach { entry ->
-                        val stamp = entry.envelope.last<SentToFailureTransportStamp>()
-                        val errorSummary = stamp?.let { "${it.failure}: ${it.failureMessage ?: ""}" } ?: "unknown"
+                        val error = entry.envelope.last<ErrorDetailsStamp>()
+                        val errorSummary =
+                            if (error != null) {
+                                "${error.exceptionClass}: ${error.exceptionMessage.orEmpty()}"
+                            } else {
+                                "unknown"
+                            }
                         echo("${entry.id} | ${entry.envelope.message::class.simpleName} | $errorSummary")
                     }
                 }

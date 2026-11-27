@@ -16,6 +16,7 @@ kotlin {
 dependencies {
     api(libs.kotlinx.coroutines.core)
 
+    testImplementation(project(":test-support"))
     testImplementation(libs.kotest.runner.junit5)
     testImplementation(libs.kotest.assertions.core)
 

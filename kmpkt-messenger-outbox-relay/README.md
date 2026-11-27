@@ -4,11 +4,11 @@ Forwards envelopes received from a source `Transport` (such as a durable outbox 
 
 ## Building Blocks
 
-| Symbol | Purpose |
+| Symbol | Description |
 | --- | --- |
 | `OutboxRelayMiddleware` | Middleware forwarding matching source envelopes directly to a target transport |
 | `OutboxRelayComponent` | DI component registering qualified `Middleware` bindings for each declared relay |
-| `OutboxRelayOptions` | DSL options for declaring `relay(from, to)` pairs |
+| `OutboxRelayOptions` | DSL options for declaring `relay(from, to)` pairs via `TransportRef` handles |
 | `outboxRelay` | `ContainerBuilder` DSL entry point for configuring `OutboxRelayComponent` |
 
 ## Installation
@@ -23,13 +23,12 @@ dependencies {
 
 ## DI Setup
 
-Declare source and target transports in `messenger`, wire the relay in `outboxRelay`, and attach the qualified `Middleware` (`"<from>-to-<to>"`) to a relay bus in `src/di/kotlin`:
+Register source and target transports in `messenger`, wire the relay in `outboxRelay` using their `TransportRef` handles, and attach the qualified `Middleware` (`"<from>-to-<to>"`) to a relay bus in `src/di/kotlin`:
 
 ```kotlin
 // src/di/kotlin/AppConfiguration.kt
 import io.kmpkt.di.compiler.Configuration
 import io.kmpkt.di.compiler.ContainerBuilder
-import io.kmpkt.messenger.di.TransportRef
 import io.kmpkt.messenger.di.maxRetries
 import io.kmpkt.messenger.di.messenger
 import io.kmpkt.messenger.middleware.Middleware
@@ -66,7 +65,7 @@ class AppConfiguration : Configuration<MyApp> {
 
 ## Usage
 
-Pair the `"relay"` bus with `TransportWork` (optionally wrapped in `LockedWork` for single-active-relay ordering) consuming the `outbox` transport in `src/main/kotlin`:
+Pair the `"relay"` bus with `TransportWork` (optionally wrapped in `LockedWork` for single-active-relay ordering) consuming the `"outbox"` transport in `src/main/kotlin`:
 
 ```kotlin
 // src/main/kotlin/OutboxRelayRunner.kt
@@ -108,7 +107,7 @@ Declare additional `relay(from, to)` entries inside `outboxRelay`; each binds a 
 
 ```kotlin
 outboxRelay {
-    relay(from = outbox, to = broker)
-    relay(from = auditOutbox, to = analyticsBroker)
+    relay(from = Outbox, to = Broker)
+    relay(from = AuditOutbox, to = AnalyticsBroker)
 }
 ```

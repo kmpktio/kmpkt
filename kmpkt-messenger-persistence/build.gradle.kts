@@ -2,6 +2,7 @@ plugins {
     id("io.kmpkt.di")
     alias(libs.plugins.kotlin.jvm)
     alias(libs.plugins.ktlint)
+    alias(libs.plugins.pitest)
     `java-library`
 }
 
@@ -17,10 +18,26 @@ dependencies {
     api(project(":kmpkt-messenger"))
     api(project(":kmpkt-persistence"))
 
+    testImplementation(project(":test-support"))
     testImplementation(libs.kotest.runner.junit5)
     testImplementation(libs.kotest.assertions.core)
+
+    pitest(libs.kotest.extensions.pitest)
 }
 
 tasks.test {
     useJUnitPlatform()
+}
+
+pitest {
+    junit5PluginVersion.set("1.2.3")
+    targetClasses.set(listOf("io.kmpkt.messenger.persistence.*"))
+    // Excludes synthetic continuation wrappers inlined from kotlinx.coroutines.flow operators.
+    excludedClasses.set(listOf("*\$\$inlined\$*"))
+    excludedMethods.set(listOf("equals", "hashCode", "toString", "copy", "copy\$default", "component*"))
+    avoidCallsTo.set(listOf("org.slf4j", "kotlin.jvm.internal", "kotlin.ResultKt"))
+    threads.set(4)
+    outputFormats.set(listOf("HTML", "XML"))
+    timestampedReports.set(false)
+    mutationThreshold.set(70)
 }

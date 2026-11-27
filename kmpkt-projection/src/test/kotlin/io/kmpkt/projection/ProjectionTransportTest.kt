@@ -9,6 +9,7 @@ import io.kmpkt.persistence.InMemoryPersistence
 import io.kmpkt.projection.fixture.ItemAdded
 import io.kmpkt.projection.fixture.ItemRemoved
 import io.kmpkt.projection.fixture.TestAggregate
+import io.kmpkt.test.TestClock
 import io.kotest.assertions.throwables.shouldThrow
 import io.kotest.core.spec.style.FunSpec
 import io.kotest.matchers.collections.shouldBeEmpty
@@ -18,10 +19,7 @@ import io.kotest.matchers.collections.shouldHaveSize
 import io.kotest.matchers.nulls.shouldBeNull
 import io.kotest.matchers.shouldBe
 import io.kotest.matchers.string.shouldContain
-import java.time.Clock
 import java.time.Instant
-import java.time.ZoneId
-import java.time.ZoneOffset
 import kotlin.time.Duration.Companion.minutes
 import kotlin.time.Duration.Companion.seconds
 
@@ -53,21 +51,6 @@ private class WhenItemRemovedForgetName : Projector<ItemRemoved, NameRow> {
     ): List<ProjectionChange<NameRow>> = listOf(Remove(match(NameRow::name to event.name)))
 }
 
-/** A clock the test moves by hand, so the backoff can be observed without waiting for it. */
-private class MovableClock(
-    private var instant: Instant = now,
-) : Clock() {
-    override fun instant(): Instant = instant
-
-    override fun getZone(): ZoneId = ZoneOffset.UTC
-
-    override fun withZone(zone: ZoneId): Clock = this
-
-    fun advance(by: kotlin.time.Duration) {
-        instant = instant.plusMillis(by.inWholeMilliseconds)
-    }
-}
-
 private suspend fun EventStore.record(
     expectedVersion: Long,
     vararg names: String,
@@ -88,7 +71,7 @@ private class Fixture(
     val eventStore = InMemoryEventStore()
     val persistence = InMemoryPersistence()
     val store = InMemoryProjectionStore<NameRow> { it.name }
-    val clock = MovableClock()
+    val clock = TestClock(now)
     val transport = ProjectionTransport("names_1", persistence, eventStore, store, projectors, clock)
     private val handler = ProjectEventHandler("names_1", store, projectors)
 

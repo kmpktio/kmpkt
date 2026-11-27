@@ -4,17 +4,20 @@ Coroutine-based polling loop (`Worker`) with configurable idle backoff, retry st
 
 ## Building Blocks
 
-| Symbol | Purpose |
+| Symbol | Description |
 | --- | --- |
 | `Work` | Functional interface for a single polling pass returning the processed item count |
 | `Worker` | Sealed interface representing a named polling loop |
 | `ManagedWorker` | Lifecycle-managed worker with `start()`, `stop()`, `isRunning`, and `onGiveUp` handling |
+| `WorkerRunner` | `ApplicationRunner` that starts registered `ManagedWorker` instances on boot and stops them on shutdown |
 | `createManagedWorker` | Factory helper creating a `ManagedWorker` with a per-worker logger |
 | `UnmanagedWorker` | Foreground worker running in the caller's coroutine and rethrowing exhausted failures |
 | `RetryStrategy` | Backoff strategy with `none`, `fixed`, `backOff`, and `forever` factories |
 | `WorkLock` | Mutual-exclusion lock interface for single-active-worker execution |
 | `LockedWork` | `Work` decorator that runs a delegate only when the `WorkLock` is acquired |
 | `WorkerComponent` | DI component that discovers `Work` services and registers a `ManagedWorker` for each |
+| `WorkerOptions` | Configuration options (`autoStart`) for `WorkerComponent` |
+| `ContainerBuilder.workers` | DSL extension function for configuring `WorkerComponent` |
 | `WorkTag`, `ManagedWorkerTag` | DI tags for discovered `Work` and generated `ManagedWorker` services |
 | `RegisterWorkersPass` | `BuilderPass` that wires a `ManagedWorker` for each tagged `Work` service |
 

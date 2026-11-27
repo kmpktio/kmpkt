@@ -129,10 +129,8 @@ class AggregateRootTest :
             failure.message.orEmpty().shouldContain("expected 1")
         }
 
-        test("restore sets version and applies state from a snapshot-like event, rejecting invalid preconditions") {
-            class RestorableCounter(
-                id: AggregateUuid<Counter>,
-            ) : BaseAggregateRoot<Counter>(id) {
+        fun newRestorableCounter(id: AggregateUuid<Counter>) =
+            object : BaseAggregateRoot<Counter>(id) {
                 var value: Int = 0
                     private set
 
@@ -145,20 +143,39 @@ class AggregateRootTest :
                 }
             }
 
+        test("restore sets version and applies state from a snapshot event") {
+            val id = AggregateUuid.generate<Counter>()
+            val counter = newRestorableCounter(id)
+
+            counter.applyRestored(CounterIncremented(id, 5, now))
+
+            counter.version shouldBe 5
+            counter.value shouldBe 1
+        }
+
+        test("restore rejects events belonging to another aggregate") {
             val id = AggregateUuid.generate<Counter>()
             val otherId = AggregateUuid.generate<Counter>()
-            val counter = RestorableCounter(id)
+            val counter = newRestorableCounter(id)
 
             shouldThrow<IllegalArgumentException> {
                 counter.applyRestored(CounterIncremented(otherId, 1, now))
             }
+        }
+
+        test("restore rejects non-positive snapshot versions") {
+            val id = AggregateUuid.generate<Counter>()
+            val counter = newRestorableCounter(id)
+
             shouldThrow<IllegalArgumentException> {
                 counter.applyRestored(CounterIncremented(id, 0, now))
             }
+        }
 
+        test("restore rejects restoring onto an already-initialized aggregate") {
+            val id = AggregateUuid.generate<Counter>()
+            val counter = newRestorableCounter(id)
             counter.applyRestored(CounterIncremented(id, 5, now))
-            counter.version shouldBe 5
-            counter.value shouldBe 1
 
             shouldThrow<IllegalArgumentException> {
                 counter.applyRestored(CounterIncremented(id, 6, now))

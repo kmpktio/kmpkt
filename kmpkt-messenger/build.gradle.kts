@@ -23,6 +23,7 @@ dependencies {
 
     testFixturesApi(testFixtures(project(":kmpkt-di-compiler-api")))
 
+    testImplementation(project(":test-support"))
     testImplementation(project(":kmpkt-di"))
     testImplementation(project(":kmpkt-di-compiler"))
     testImplementation(libs.kctfork.ksp)

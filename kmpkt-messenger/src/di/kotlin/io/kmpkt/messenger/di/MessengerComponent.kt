@@ -28,6 +28,8 @@ import io.kmpkt.messenger.transport.Transport
 import io.kmpkt.messenger.transport.middleware.SendMessageMiddleware
 import io.kmpkt.messenger.transport.registry.DefaultTransportRegistry
 import io.kmpkt.messenger.transport.registry.TransportRegistry
+import io.kmpkt.messenger.transport.routing.DefaultTransportRouter
+import io.kmpkt.messenger.transport.routing.TransportRouter
 import java.time.Clock
 
 /**
@@ -61,22 +63,6 @@ public fun ContainerBuilder.messenger(block: MessengerOptions.() -> Unit) {
  *     defaultBus = command
  * }
  * ```
- *
- * **Buses.** Each is bound as `MessageBus` under its name, so a parameter `command: MessageBus` gets the
- * command bus; if [MessengerOptions.defaultBus] is set, that bus is bound without a name as well. Its registry
- * is bound as `HandlerRegistry` the same way. An application that configures no bus gets a single bus named
- * `default`, which is also bound without a name.
- *
- * **Transports.** A message goes to the transport its type is routed to, or else to the bus's default, which
- * unless said otherwise is `sync`: straight back to the same bus, handled inline. Retrying and putting
- * failed messages aside are configured on the transport. A queue transport is bound as
- * `Transport` under its name and its strategy as `RetryStrategy` under the same, which is where whoever runs
- * a worker for it finds them.
- *
- * **Handlers.** Any registered service that is a [MessageHandler]. Which message it handles is read off its
- * type argument; which bus it is on is the bus's `handles<…>()`, or [MessageHandlerTag.bus].
- *
- * Time is `Clock.systemUTC()` unless the application registers a `Clock` of its own.
  */
 public class MessengerComponent : Component<MessengerOptions> {
     override fun defaults(): MessengerOptions = MessengerOptions()
@@ -124,6 +110,10 @@ public class MessengerComponent : Component<MessengerOptions> {
             }
         val fallbackArg = default?.let { reference(ServiceId("messenger.bus.${it.name}")) } ?: NULL
 
+        service<DefaultTransportRegistry>(ServiceId("messenger.transports")) {
+            bind<TransportRegistry>()
+            argument("transports", Argument.Dictionary(transportEntries))
+        }
         service<RoutableMessageBus>(ServiceId("messenger.routableBus")) {
             argument("buses", Argument.Dictionary(busEntries))
             argument("fallback", fallbackArg)
@@ -268,8 +258,14 @@ public class MessengerComponent : Component<MessengerOptions> {
 
         val name = busRef.name
         val used = (bus.routes.values.map(transports::getValue) + fallback).distinctBy { it.ref }
-        val routes =
-            service<DefaultTransportRegistry>(ServiceId("messenger.bus.$name.routes")) {
+        val transportEntries = used.map { literal(it.name) to transportOf(busRef, it, transports) }
+        val registry =
+            service<DefaultTransportRegistry>(ServiceId("messenger.bus.$name.transports")) {
+                argument("transports", Argument.Dictionary(transportEntries))
+            }
+        val router =
+            service<DefaultTransportRouter>(ServiceId("messenger.bus.$name.routes")) {
+                argument<TransportRegistry>(reference(registry.id))
                 argument(
                     "routes",
                     Argument.Dictionary(
@@ -281,17 +277,15 @@ public class MessengerComponent : Component<MessengerOptions> {
                 argument("fallback", literal(fallback.name))
             }
 
-        val transportEntries = used.map { literal(it.name) to transportOf(busRef, it, transports) }
         val send =
             service<SendMessageMiddleware>(ServiceId("messenger.bus.$name.send")) {
-                argument<TransportRegistry>(reference(routes.id))
-                argument("transports", Argument.Dictionary(transportEntries))
+                argument<TransportRouter>(reference(router.id))
             }
 
         return reference(send.id)
     }
 
-    /** Resolves a transport declaration to the [Argument] passed into [SendMessageMiddleware]. */
+    /** Resolves a transport declaration to the [Argument] passed into [DefaultTransportRegistry]. */
     private fun ContainerBuilder.transportOf(
         busRef: BusRef,
         transport: TransportDeclaration,

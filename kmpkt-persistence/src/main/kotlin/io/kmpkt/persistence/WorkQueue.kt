@@ -1,7 +1,6 @@
 package io.kmpkt.persistence
 
 import kotlinx.coroutines.flow.Flow
-import kotlinx.coroutines.flow.emptyFlow
 import java.time.Instant
 
 /**
@@ -40,9 +39,9 @@ public interface WorkQueue {
 
     public suspend fun fail(id: String)
 
-    public fun list(): Flow<QueuedItem> = emptyFlow()
+    public fun list(): Flow<QueuedItem>
 
-    public suspend fun find(id: String): QueuedItem? = null
+    public suspend fun find(id: String): QueuedItem?
 
-    public suspend fun remove(id: String): Boolean = false
+    public suspend fun remove(id: String): Boolean
 }

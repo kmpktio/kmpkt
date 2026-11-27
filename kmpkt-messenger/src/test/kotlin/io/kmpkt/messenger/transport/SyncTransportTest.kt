@@ -11,6 +11,7 @@ import io.kmpkt.messenger.message.MessageHandler
 import io.kmpkt.messenger.retry.MultiplierRetryStrategy
 import io.kmpkt.messenger.retry.RecoverableException
 import io.kmpkt.messenger.retry.UnrecoverableException
+import io.kmpkt.messenger.stamp.ErrorDetailsStamp
 import io.kmpkt.messenger.stamp.ReceivedStamp
 import io.kmpkt.messenger.stamp.RedeliveryStamp
 import io.kmpkt.messenger.stamp.SentToFailureTransportStamp
@@ -149,7 +150,8 @@ class SyncTransportTest :
             bus.dispatched.size shouldBe 2
             failed.pending() shouldBe listOf(result)
             result.message shouldBe Greet("Milch")
-            result.last<SentToFailureTransportStamp>() shouldBe SentToFailureTransportStamp("sync", "IllegalStateException", "boom")
+            result.last<SentToFailureTransportStamp>() shouldBe SentToFailureTransportStamp("sync")
+            result.last<ErrorDetailsStamp>() shouldBe ErrorDetailsStamp("IllegalStateException", "boom")
             RedeliveryStamp.retryCountOf(result) shouldBe 1
         }
 
@@ -172,7 +174,7 @@ class SyncTransportTest :
             val bus = RecordingMessageBus { throw Lost() }
             val failed = InMemoryTransport()
             val transport = SyncTransport(lazy { bus }, "sync", failureTransport = failed)
-            val putAside = Envelope(Greet("Milch")).with(SentToFailureTransportStamp("async", "Lost", null))
+            val putAside = Envelope(Greet("Milch")).with(SentToFailureTransportStamp("async"))
 
             // Act + Assert
             shouldThrow<Lost> { transport.send(putAside) }
