@@ -7,7 +7,6 @@ import io.kmpkt.messenger.retry.RetryDecider
 import io.kmpkt.messenger.retry.RetryStrategy
 import io.kmpkt.messenger.stamp.ReceivedStamp
 import io.kmpkt.messenger.stamp.RedeliveryStamp
-import io.kmpkt.messenger.stamp.SentToFailureTransportStamp
 import io.kmpkt.messenger.transport.stamp.SentStamp
 
 /**
@@ -64,14 +63,9 @@ public class SyncTransport(
         envelope: Envelope,
         alias: String,
         failure: Exception,
-    ): Envelope {
+    ): Envelope =
         // Already put aside once: failing again while it is being looked at is the looker's to see.
-        if (failureTransport == null || envelope.last<SentToFailureTransportStamp>() != null) throw failure
-
-        return failureTransport.send(
-            envelope.with(SentToFailureTransportStamp(alias, failure::class.simpleName ?: "Unknown", failure.message)),
-        )
-    }
+        failureTransport?.putAside(alias, envelope, failure) ?: throw failure
 
     /** What handling got done before [failure], so the handlers that succeeded are not run a second time. */
     private fun Envelope.progressOf(failure: Exception): Envelope {

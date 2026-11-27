@@ -27,7 +27,7 @@ KmpKt is split into focused modules so applications only pull in the capabilitie
   `CommandBus` (`HandlerPolicy.SINGLE`).
 - [`kmpkt-event-bus`](../kmpkt-event-bus/README.md) — `Event`, `EventHandler`, and `EventBus`
   (`HandlerPolicy.MULTIPLE`).
-- [`kmpkt-query-bus`](../kmpkt-query-bus) — `Query<R>`, `QueryHandler<Q, R>`, and `QueryBus`
+- [`kmpkt-query-bus`](../kmpkt-query-bus/README.md) — `Query<R>`, `QueryHandler<Q, R>`, and `QueryBus`
   (`HandlerPolicy.SINGLE`).
 
 ## Persistence

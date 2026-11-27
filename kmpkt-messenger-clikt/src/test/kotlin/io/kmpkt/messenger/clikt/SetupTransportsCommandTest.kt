@@ -73,4 +73,10 @@ class SetupTransportsCommandTest :
             result.statusCode shouldNotBe 0
             result.stderr shouldContain "Unknown transport(s): missing"
         }
+
+        test("prints command help") {
+            val catalog = MessengerCatalog(buses = emptyMap(), transports = emptyMap())
+
+            SetupTransportsCommand(catalog).test("--help").stdout shouldContain "Set up backing infrastructure"
+        }
     })

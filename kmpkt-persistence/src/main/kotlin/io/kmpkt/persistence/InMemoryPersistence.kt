@@ -1,5 +1,7 @@
 package io.kmpkt.persistence
 
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
@@ -182,6 +184,32 @@ public class InMemoryPersistence : Persistence {
             override suspend fun fail(id: String) {
                 withTx { queueItems[name]?.get(id)?.status = QueueStatus.Failed }
             }
+
+            override fun list(): Flow<QueuedItem> =
+                flow {
+                    val items =
+                        withTx {
+                            queueItems[name]
+                                ?.values
+                                ?.asSequence()
+                                ?.filter { it.status == QueueStatus.Pending }
+                                ?.sortedWith(compareBy<MutableQueueEntry> { it.availableAt }.thenBy { it.id })
+                                ?.map { QueuedItem(it.id, it.payload, it.availableAt, it.attempts) }
+                                ?.toList()
+                                .orEmpty()
+                        }
+                    items.forEach { emit(it) }
+                }
+
+            override suspend fun find(id: String): QueuedItem? =
+                withTx {
+                    queueItems[name]
+                        ?.get(id)
+                        ?.takeIf { it.status == QueueStatus.Pending }
+                        ?.let { QueuedItem(it.id, it.payload, it.availableAt, it.attempts) }
+                }
+
+            override suspend fun remove(id: String): Boolean = withTx { queueItems[name]?.remove(id) != null }
         }
 
     override suspend fun <R> inTransaction(block: suspend () -> R): R {

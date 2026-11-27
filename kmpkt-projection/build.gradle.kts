@@ -18,6 +18,7 @@ dependencies {
     api(project(":kmpkt-event-store"))
     api(project(":kmpkt-persistence"))
 
+    testImplementation(project(":test-support"))
     testImplementation(testFixtures(project(":kmpkt-messenger")))
     testImplementation(libs.kotest.runner.junit5)
     testImplementation(libs.kotest.assertions.core)

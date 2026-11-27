@@ -136,10 +136,11 @@ fun main(args: Array<String>) = KmpKt.run<TodoApp>(args)
 | Layer | Modules |
 | --- | --- |
 | **DI** | `kmpkt-di`, `kmpkt-di-compiler-api`, `kmpkt-di-compiler`, `kmpkt-di-compiler-plugin` |
-| **Messaging** | `kmpkt-worker`, `kmpkt-messenger`, `kmpkt-command-bus`, `kmpkt-event-bus`, `kmpkt-query-bus` |
+| **Messaging** | `kmpkt-worker`, `kmpkt-messenger`, `kmpkt-messenger-outbox-relay`, `kmpkt-messenger-clikt`, `kmpkt-command-bus`, `kmpkt-event-bus`, `kmpkt-query-bus` |
 | **Persistence** | `kmpkt-persistence`, `kmpkt-persistence-jdbc`, `kmpkt-messenger-persistence` |
 | **Event Sourcing** | `kmpkt-aggregate`, `kmpkt-event-store`, `kmpkt-aggregate-snapshot`, `kmpkt-serialization-kotlinx` |
 | **Read & React** | `kmpkt-policy`, `kmpkt-projection` |
+| **Resilience** | `kmpkt-resilience` |
 | **Bridges** | `kmpkt-clikt-bridge`, `kmpkt-ktor-bridge` |
 
 See the [Module Guide](docs/modules.md) for details on each module.

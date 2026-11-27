@@ -77,10 +77,10 @@ private val configuration =
         import io.kmpkt.messenger.handler.HandlerPolicy
         import io.kmpkt.messenger.handler.stamp.HandledStamp
         import io.kmpkt.messenger.retry.MultiplierRetryStrategy
-        import io.kmpkt.messenger.stamp.SentToFailureTransportStamp
+        import io.kmpkt.messenger.stamp.ErrorDetailsStamp
         import io.kmpkt.messenger.transport.InMemoryTransport
         import io.kmpkt.messenger.transport.SyncTransport
-        import io.kmpkt.messenger.transport.Transport
+        import io.kmpkt.messenger.transport.registry.TransportRegistry
         import kotlinx.coroutines.runBlocking
         import kotlin.time.Duration.Companion.seconds
 
@@ -91,9 +91,10 @@ private val configuration =
         class MessengerRunner(
             private val commands: MessageBus,
             private val events: MessageBus,
-            private val failed: Transport,
+            private val transports: TransportRegistry,
         ) : ApplicationRunner {
             override fun run(args: Array<String>) = runBlocking {
+                val failed = transports.get("failed") as InMemoryTransport
                 Output.result =
                     listOf(
                         commands.dispatch(Ping()).all<HandledStamp>().map { it.result },
@@ -101,7 +102,7 @@ private val configuration =
                         // No handler for it on the command bus: given up on at once, and put aside rather than thrown.
                         runCatching { commands.dispatch(Happened()) }.exceptionOrNull()?.let { it::class.simpleName },
                         events.dispatch(Ping()).all<HandledStamp>().size,
-                        (failed as InMemoryTransport).pending().map { it.last<SentToFailureTransportStamp>()?.failure },
+                        failed.pending().map { it.last<ErrorDetailsStamp>()?.exceptionClass },
                     )
             }
         }
@@ -140,7 +141,6 @@ private val configuration =
                 container.service<MessengerRunner> {
                     argument("commands", Argument.Service(ServiceReference.ByKey(ServiceKey(typeRef<MessageBus>(), "command"))))
                     argument("events", Argument.Service(ServiceReference.ByKey(ServiceKey(typeRef<MessageBus>(), "event"))))
-                    argument("failed", Argument.Service(ServiceReference.ByKey(ServiceKey(typeRef<Transport>(), "failed"))))
                 }
             }
         }
@@ -195,14 +195,11 @@ private fun compile(
 class GeneratedMessengerTest :
     FunSpec({
         test("two buses with their own handlers compile and dispatch; the command bus retries and puts aside what it gives up on") {
-            // Arrange
             val (configured, configurationOutput) = compile(handlers, configuration)
             configured.exitCode shouldBe KotlinCompilation.ExitCode.OK
 
-            // Act
             val (compiled, _) = compile(application, classpath = configurationOutput, processorClasspath = configurationOutput)
 
-            // Assert
             compiled.messages.lines().filter { it.startsWith("e: ") } shouldBe emptyList()
             compiled.classLoader
                 .loadClass("acme.AppKt")

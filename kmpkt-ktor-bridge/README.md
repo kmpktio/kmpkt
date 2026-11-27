@@ -1,6 +1,6 @@
 # kmpkt-ktor-bridge
 
-Ktor Netty server integration for KmpKt compile-time dependency injection. Collects registered `HttpRoutes`, `KtorServerPlugin`, and `Worker` services into a `KtorServer` service.
+Ktor Netty server integration for KmpKt compile-time dependency injection. Collects registered `HttpRoutes` and `KtorServerPlugin` services into a `KtorServer` service.
 
 ## Building Blocks
 
@@ -8,7 +8,7 @@ Ktor Netty server integration for KmpKt compile-time dependency injection. Colle
 
 | Symbol | Description |
 | --- | --- |
-| `KtorServer` | Embeds Netty via `embeddedServer`, installs `KtorServerPlugin` and `HttpRoutes` contributions, and binds `ManagedWorker` and `UnmanagedWorker` lifecycles to `ApplicationStarted` and `ApplicationStopping`. |
+| `KtorServer` | Embeds Netty via `embeddedServer` (`start` / `stop`) and installs `KtorServerPlugin` and `HttpRoutes` contributions. |
 | `KtorServerConfig` | Server configuration data class holding the HTTP `port` (default `8080`). |
 | `KtorServerPlugin` | Functional interface for installing application-level Ktor plugins and configuration. |
 | `HttpRoutes` | Functional interface for contributing HTTP routes to Ktor's `Routing`. |
@@ -17,9 +17,9 @@ Ktor Netty server integration for KmpKt compile-time dependency injection. Colle
 
 | Symbol | Description |
 | --- | --- |
-| `KtorComponent` | `Component` that autoconfigures `HttpRoutes`, `Worker`, and `KtorServerPlugin` services and registers `KtorServerConfig` and `KtorServer`. |
+| `KtorComponent` | `Component` that autoconfigures `HttpRoutes` and `KtorServerPlugin` services and registers `KtorServerConfig` and `KtorServer`. |
 | `KtorOptions` | Configuration options for setting the server `port` and registering `KtorServerPlugin` factory `module` functions. |
-| `HttpRoutesTag`, `WorkerTag`, `KtorPluginTag` | `Tag` objects used to collect routes, workers, and plugins into `KtorServer`. |
+| `HttpRoutesTag`, `KtorPluginTag` | `Tag` objects used to collect routes and plugins into `KtorServer`. |
 | `ContainerBuilder.ktor` | DSL extension function for configuring `KtorComponent`. |
 
 ## Installation
@@ -106,16 +106,5 @@ fun jsonPlugin(): KtorServerPlugin = KtorServerPlugin {
 // In Configuration.configure():
 ktor {
     module(::jsonPlugin)
-}
-```
-
-### Background workers
-
-Implement `ManagedWorker` or `UnmanagedWorker` from `kmpkt-worker`; registered or discovered `Worker` services are tagged with `WorkerTag` and bound to Ktor's `ApplicationStarted` and `ApplicationStopping` events:
-
-```kotlin
-class CleanupWorker : ManagedWorker {
-    override fun start() { /* start background loop */ }
-    override suspend fun stop() { /* flush and shut down */ }
 }
 ```

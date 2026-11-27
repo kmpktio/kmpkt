@@ -11,6 +11,7 @@ import io.kmpkt.messenger.retry.MultiplierRetryStrategy
 import io.kmpkt.messenger.retry.RetryScheduledException
 import io.kmpkt.messenger.retry.middleware.RetryMiddleware
 import io.kmpkt.messenger.stamp.DelayStamp
+import io.kmpkt.messenger.stamp.ErrorDetailsStamp
 import io.kmpkt.messenger.stamp.ReceivedStamp
 import io.kmpkt.messenger.stamp.RedeliveryStamp
 import io.kmpkt.messenger.stamp.SentToFailureTransportStamp
@@ -133,7 +134,7 @@ class TransportWorkTest :
 
             // Assert
             val received = envelope.with(ReceivedStamp("queue"))
-            val redelivered = received.with(RedeliveryStamp(1), DelayStamp(2.seconds))
+            val redelivered = received.with(RedeliveryStamp(1), DelayStamp(2.seconds), ErrorDetailsStamp("RuntimeException", "boom"))
             transport.rejected shouldBe listOf(envelope)
             transport.acked shouldBe listOf(redelivered)
         }
@@ -153,7 +154,12 @@ class TransportWorkTest :
             // Assert
             transport.rejected shouldBe listOf(envelope)
             failed.pending() shouldBe
-                listOf(envelope.with(SentToFailureTransportStamp("queue", "IllegalStateException", "boom")))
+                listOf(
+                    envelope.with(
+                        SentToFailureTransportStamp("queue"),
+                        ErrorDetailsStamp("IllegalStateException", "boom"),
+                    ),
+                )
         }
 
         test("does not send to failureTransport when RetryScheduledException signals a retry") {
@@ -176,7 +182,7 @@ class TransportWorkTest :
         test("consuming the failure transport itself does not feed a failing message back into it") {
             // Arrange
             val failed = InMemoryTransport()
-            val putAside = Envelope(Greet("Milch")).with(SentToFailureTransportStamp("queue", "IllegalStateException", "boom"))
+            val putAside = Envelope(Greet("Milch")).with(SentToFailureTransportStamp("queue"))
             failed.send(putAside)
             val bus = RecordingMessageBus { throw IllegalStateException("still broken") }
             val work = TransportWork(failed, "failed", bus, logger, failureTransport = failed)

@@ -25,6 +25,8 @@ import io.kmpkt.messenger.transport.Transport
 import io.kmpkt.messenger.transport.middleware.SendMessageMiddleware
 import io.kmpkt.messenger.transport.registry.DefaultTransportRegistry
 import io.kmpkt.messenger.transport.registry.TransportRegistry
+import io.kmpkt.messenger.transport.routing.DefaultTransportRouter
+import io.kmpkt.messenger.transport.routing.TransportRouter
 import org.slf4j.Logger
 import java.time.Clock
 import kotlin.reflect.KClass
@@ -71,13 +73,17 @@ public fun FakeTypeOracle.declareMessenger() {
     )
     declare<InMemoryTransport>(parameter<Clock>("clock", hasDefault = true), supertypes = listOf(typeRef<Transport>()))
     declare<DefaultTransportRegistry>(
-        parameter<Map<KClass<out Message>, String>>("routes", hasDefault = true),
-        parameter<String?>("fallback", hasDefault = true),
+        parameter<Map<String, Transport>>("transports", hasDefault = true),
         supertypes = listOf(typeRef<TransportRegistry>()),
     )
-    declare<SendMessageMiddleware>(
+    declare<DefaultTransportRouter>(
         parameter<TransportRegistry>("transportRegistry"),
-        parameter<Map<String, Transport>>("transports"),
+        parameter<Map<KClass<out Message>, String>>("routes", hasDefault = true),
+        parameter<String?>("fallback", hasDefault = true),
+        supertypes = listOf(typeRef<TransportRouter>()),
+    )
+    declare<SendMessageMiddleware>(
+        parameter<TransportRouter>("transportRouter"),
         parameter<Clock>("clock"),
         supertypes = listOf(typeRef<Middleware>()),
     )

@@ -13,8 +13,8 @@ import io.kmpkt.persistence.WorkQueue
 import io.kmpkt.persistence.createWorkQueue
 
 /**
- * Ensures every [PersistentTransport] registered via `messenger { transport<PersistentTransport>(name) }`
- * receives a dedicated [WorkQueue] scoped to `name`.
+ * Ensures every [PersistentTransport] registered via `messenger { transport<PersistentTransport>(marker) }`
+ * receives a dedicated [WorkQueue] scoped to `marker.name`.
  */
 public class WirePersistentTransportsPass : BuilderPass {
     override fun process(container: ContainerBuilder) {

@@ -40,7 +40,9 @@ public class MessengerOptions {
         type: TypeRef,
         configure: TransportOptions<T>.() -> Unit,
     ): TransportRef<T> {
+        require(name.isNotBlank()) { "Transport name must not be blank." }
         val ref = TransportRef<T>(name)
+        require(ref !in transports) { "Transport \"$name\" is already declared." }
         val options = TransportOptions<T>().apply(configure)
         transports[ref] = TransportDeclaration(ref, type, options.retry, options.failureTransport)
 
@@ -48,7 +50,7 @@ public class MessengerOptions {
     }
 
     /**
-     * Declares a transport: a [T] the container builds, known to routing through the reference this returns.
+     * Declares a transport: a [T] the container builds, known to routing through the [TransportRef] this returns.
      *
      * ```kotlin
      * val failed = transport<InMemoryTransport>("failed")
@@ -57,21 +59,18 @@ public class MessengerOptions {
      *     failureTransport = failed
      * }
      * ```
-     *
-     * A `SyncTransport` hands a message straight back to the bus it came from, so each bus that uses one gets
-     * an instance of its own. A transport named `sync` exists without being declared; declaring it is how it
-     * gets a retry or a failure transport.
      */
     public inline fun <reified T : Transport> transport(
         name: String,
         noinline configure: TransportOptions<T>.() -> Unit = {},
     ): TransportRef<T> = transport(name, typeRef<T>(), configure)
 
-    /** Declares the bus [name], or adds to it when it was declared before, returning its reference. */
+    /** Declares the bus [name], or adds to it when it was declared before, returning its [BusRef]. */
     public fun bus(
         name: String,
         configure: BusOptions.() -> Unit = {},
     ): BusRef {
+        require(name.isNotBlank()) { "Bus name must not be blank." }
         val ref = BusRef(name)
         buses.getOrPut(ref) { BusOptions() }.apply(configure)
 
@@ -89,8 +88,8 @@ public value class BusRef internal constructor(
 )
 
 /**
- * A declared transport, as routing refers to it. Only [MessengerOptions.transport] makes one, so a route
- * cannot name a transport that does not exist.
+ * A declared transport, as routing and relays refer to it. Only [MessengerOptions.transport] makes one,
+ * so a route cannot name a transport that does not exist.
  */
 @JvmInline
 public value class TransportRef<out T : Transport> internal constructor(
@@ -115,17 +114,6 @@ public class TransportOptions<T : Transport> internal constructor() {
 
     /**
      * Has a message that failed on this transport tried again, as [S] decides.
-     * The block sets the strategy's own parameters:
-     *
-     * ```kotlin
-     * retry<MultiplierRetryStrategy> {
-     *     maxRetries = 5
-     *     delay = 2.seconds
-     * }
-     * ```
-     *
-     * What can be set depends on [S]; for a strategy without settings the block is left out. On a sync
-     * transport the retry is immediate; on a queue it is the worker's, by sending the message back.
      */
     public inline fun <reified S : RetryStrategy> retry(noinline configure: StrategyOptions<S>.() -> Unit = {}) {
         retry(typeRef<S>(), configure)
@@ -134,15 +122,6 @@ public class TransportOptions<T : Transport> internal constructor() {
 
 /**
  * The constructor arguments of the retry strategy [S], set by name.
- *
- * What a block may set is given by extension properties on `StrategyOptions<S>` for that one [S] — see the
- * ones for `MultiplierRetryStrategy`. A strategy of the application's own gets its settings the same way:
- *
- * ```kotlin
- * var StrategyOptions<BackOffOnRateLimit>.limit: Int
- *     get() = get("limit")
- *     set(value) = set("limit", value, literal(value))
- * ```
  */
 @ContainerDsl
 public class StrategyOptions<S : RetryStrategy> internal constructor() {
@@ -214,8 +193,7 @@ public class BusOptions internal constructor() {
 
     /**
      * Puts every handler that is an [H] on this bus - `handles<CommandHandler<*>>()` - and no other, apart
-     * from one that names this bus in its `MessageHandlerTag`. A bus that says nothing here takes every
-     * handler that does not name a bus, which with two buses is rarely what is meant.
+     * from one that names this bus in its `MessageHandlerTag`.
      */
     public inline fun <reified H : MessageHandler<*, *>> handles() {
         handles(typeRef<H>())
@@ -227,8 +205,7 @@ public class BusOptions internal constructor() {
     }
 
     /**
-     * Puts the service bound to [M] into this bus's chain, after the ones named before it. The service itself
-     * is registered like any other - by the application or by another component.
+     * Puts the service bound to [M] into this bus's chain, after the ones named before it.
      */
     public inline fun <reified M : Middleware> middleware(qualifier: String? = null) {
         middleware(ServiceKey(typeRef<M>(), qualifier))
@@ -294,7 +271,7 @@ public data class MessageHandlerTag(
 
 /**
  * Marks the handler registry of the bus [bus], which is where [RegisterMessageHandlersPass][io.kmpkt.messenger.di.pass.RegisterMessageHandlersPass] puts its handlers:
- * the ones that name the bus, and of the others those that are one of [handles] — or all, if that is empty.
+ * the ones that name the bus, and of the others those that are one of [handles] - or all, if that is empty.
  */
 public data class HandlerRegistryTag(
     val bus: String,

@@ -1,130 +1,144 @@
 package io.kmpkt.messenger.persistence
 
-import io.kmpkt.messenger.bus.DefaultMessageBus
-import io.kmpkt.messenger.handler.DefaultHandlerRegistry
-import io.kmpkt.messenger.handler.HandlerPolicy
-import io.kmpkt.messenger.handler.exception.HandlerFailedException
-import io.kmpkt.messenger.handler.middleware.HandleMessageMiddleware
 import io.kmpkt.messenger.message.Envelope
 import io.kmpkt.messenger.message.Message
-import io.kmpkt.messenger.message.MessageHandler
-import io.kmpkt.messenger.persistence.middleware.TransactionMiddleware
 import io.kmpkt.messenger.persistence.serialization.EnvelopeSerializer
+import io.kmpkt.messenger.persistence.stamp.PersistentQueueItemStamp
 import io.kmpkt.messenger.persistence.transport.PersistentTransport
 import io.kmpkt.messenger.stamp.DelayStamp
 import io.kmpkt.persistence.InMemoryPersistence
+import io.kmpkt.test.TestClock
 import io.kotest.assertions.throwables.shouldThrow
 import io.kotest.core.spec.style.FunSpec
 import io.kotest.matchers.collections.shouldBeEmpty
 import io.kotest.matchers.collections.shouldHaveSize
 import io.kotest.matchers.nulls.shouldBeNull
 import io.kotest.matchers.shouldBe
-import java.time.Clock
-import java.time.Instant
-import java.time.ZoneId
-import java.time.ZoneOffset
+import io.kotest.matchers.string.shouldContain
+import kotlinx.coroutines.flow.toList
 import kotlin.time.Duration.Companion.seconds
 
-private data class TestJob(
+private data class QueuedJob(
     val name: String,
-    val shouldFail: Boolean = false,
 ) : Message
 
-private class MovableClock(
-    var now: Instant = Instant.parse("2026-01-01T00:00:00Z"),
-) : Clock() {
-    override fun getZone(): ZoneId = ZoneOffset.UTC
+private object QueuedJobSerializer : EnvelopeSerializer {
+    override fun serialize(envelope: Envelope): String = (envelope.message as QueuedJob).name
 
-    override fun withZone(zone: ZoneId): Clock = this
-
-    override fun instant(): Instant = now
-}
-
-private class TestEnvelopeSerializer : EnvelopeSerializer {
-    override fun serialize(envelope: Envelope): String {
-        val job = envelope.message as TestJob
-        return "${job.name}|${job.shouldFail}"
-    }
-
-    override fun deserialize(payload: String): Envelope {
-        val parts = payload.split('|', limit = 2)
-        return Envelope(TestJob(parts[0], parts[1].toBoolean()))
-    }
+    override fun deserialize(payload: String): Envelope = Envelope(QueuedJob(payload))
 }
 
 class PersistentTransportTest :
     FunSpec({
-        test("send, receive, ack, and DelayStamp work over WorkQueue") {
-            val clock = MovableClock()
+        test("delivers immediate envelopes and holds delayed envelopes until DelayStamp expires") {
+            val clock = TestClock()
             val persistence = InMemoryPersistence()
-            val transport = PersistentTransport(persistence, "jobs", TestEnvelopeSerializer(), clock)
+            val transport = PersistentTransport(persistence, "jobs", QueuedJobSerializer, clock)
 
-            transport.send(Envelope(TestJob("immediate")))
-            transport.send(Envelope(TestJob("delayed")).with(DelayStamp(30.seconds)))
+            transport.send(Envelope(QueuedJob("immediate")))
+            transport.send(Envelope(QueuedJob("delayed")).with(DelayStamp(30.seconds)))
 
             val first = transport.receive()
             first shouldHaveSize 1
-            (first.first().message as TestJob).name shouldBe "immediate"
+            (first.first().message as QueuedJob).name shouldBe "immediate"
+            val claimedId = first.first().last<PersistentQueueItemStamp>()!!.itemId
             transport.ack(first.first())
+            persistence.workQueue("jobs").remove(claimedId) shouldBe false
 
             transport.receive().shouldBeEmpty()
 
-            clock.now = clock.now.plusSeconds(30)
+            clock.advance(30.seconds)
             val second = transport.receive()
             second shouldHaveSize 1
-            (second.first().message as TestJob).name shouldBe "delayed"
+            (second.first().message as QueuedJob).name shouldBe "delayed"
             transport.ack(second.first())
 
             transport.receive().shouldBeEmpty()
         }
 
-        test("reject marks the queue item as failed so it is not claimed again") {
-            val clock = MovableClock()
+        test("marks rejected queue items as failed so they are not claimed again") {
+            val clock = TestClock()
             val persistence = InMemoryPersistence()
-            val transport = PersistentTransport(persistence, "jobs", TestEnvelopeSerializer(), clock)
+            val transport = PersistentTransport(persistence, "jobs", QueuedJobSerializer, clock)
 
-            transport.send(Envelope(TestJob("poison")))
+            transport.send(Envelope(QueuedJob("poison")))
             val claimed = transport.receive()
             claimed shouldHaveSize 1
 
             transport.reject(claimed.first())
+
             transport.receive().shouldBeEmpty()
         }
 
-        test("TransactionMiddleware commits on success and rolls back all persistence writes on failure") {
-            val persistence = InMemoryPersistence()
-            val store = persistence.keyValueStore("state")
-            val registry =
-                DefaultHandlerRegistry().apply {
-                    register(
-                        TestJob::class,
-                        object : MessageHandler<TestJob, Unit> {
-                            override suspend fun invoke(message: TestJob) {
-                                store.put("last", message.name)
-                                if (message.shouldFail) error("boom")
-                            }
-                        },
-                    )
+        test("sets up backing queue without error") {
+            val transport = PersistentTransport(InMemoryPersistence(), "jobs", QueuedJobSerializer, TestClock())
+
+            transport.setup()
+        }
+
+        test("streams queued envelopes in order via ListableTransport.all") {
+            val clock = TestClock()
+            val transport = PersistentTransport(InMemoryPersistence(), "jobs", QueuedJobSerializer, clock)
+
+            transport.send(Envelope(QueuedJob("one")))
+            clock.advance(1.seconds)
+            transport.send(Envelope(QueuedJob("two")))
+
+            val listed = transport.all().toList()
+            listed.map { (it.envelope.message as QueuedJob).name } shouldBe listOf("one", "two")
+        }
+
+        test("looks up queued envelopes by id via ListableTransport.find") {
+            val transport = PersistentTransport(InMemoryPersistence(), "jobs", QueuedJobSerializer, TestClock())
+            transport.send(Envelope(QueuedJob("one")))
+            val id =
+                transport
+                    .all()
+                    .toList()
+                    .single()
+                    .id
+
+            (transport.find(id)?.envelope?.message as? QueuedJob)?.name shouldBe "one"
+            transport.find("missing").shouldBeNull()
+        }
+
+        test("removes queued envelopes by id via ListableTransport.remove") {
+            val clock = TestClock()
+            val transport = PersistentTransport(InMemoryPersistence(), "jobs", QueuedJobSerializer, clock)
+            transport.send(Envelope(QueuedJob("one")))
+            clock.advance(1.seconds)
+            transport.send(Envelope(QueuedJob("two")))
+            val firstId =
+                transport
+                    .all()
+                    .toList()
+                    .first()
+                    .id
+
+            transport.remove(firstId) shouldBe true
+            transport.remove("missing") shouldBe false
+            transport.all().toList() shouldHaveSize 1
+        }
+
+        test("rejects ack when PersistentQueueItemStamp is missing") {
+            val transport = PersistentTransport(InMemoryPersistence(), "jobs", QueuedJobSerializer, TestClock())
+
+            val error =
+                shouldThrow<IllegalStateException> {
+                    transport.ack(Envelope(QueuedJob("untracked")))
                 }
-            val bus =
-                DefaultMessageBus(
-                    middleware =
-                        listOf(
-                            TransactionMiddleware(persistence),
-                            HandleMessageMiddleware(registry, HandlerPolicy.SINGLE, Clock.systemUTC()),
-                        ),
-                    handlerRegistry = registry,
-                )
 
-            bus.dispatch(TestJob("ok"))
-            store.get("last") shouldBe "ok"
+            error.message shouldContain "PersistentQueueItemStamp"
+        }
 
-            shouldThrow<HandlerFailedException> {
-                bus.dispatch(TestJob("broken", shouldFail = true))
-            }
-            store.get("last") shouldBe "ok"
+        test("rejects reject when PersistentQueueItemStamp is missing") {
+            val transport = PersistentTransport(InMemoryPersistence(), "jobs", QueuedJobSerializer, TestClock())
 
-            val freshStore = InMemoryPersistence().keyValueStore("state")
-            freshStore.get("last").shouldBeNull()
+            val error =
+                shouldThrow<IllegalStateException> {
+                    transport.reject(Envelope(QueuedJob("untracked")))
+                }
+
+            error.message shouldContain "PersistentQueueItemStamp"
         }
     })

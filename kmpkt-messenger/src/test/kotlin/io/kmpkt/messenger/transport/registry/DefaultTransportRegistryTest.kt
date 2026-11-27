@@ -1,35 +1,44 @@
 package io.kmpkt.messenger.transport.registry
 
-import io.kmpkt.messenger.fixture.Greet
-import io.kmpkt.messenger.message.Message
+import io.kmpkt.messenger.message.Envelope
+import io.kmpkt.messenger.transport.Transport
+import io.kotest.assertions.throwables.shouldThrow
 import io.kotest.core.spec.style.FunSpec
-import io.kotest.matchers.nulls.shouldBeNull
 import io.kotest.matchers.shouldBe
+import io.kotest.matchers.string.shouldContain
+
+private object StubTransport : Transport {
+    override suspend fun send(envelope: Envelope): Envelope = envelope
+
+    override suspend fun receive(): List<Envelope> = emptyList()
+
+    override suspend fun ack(envelope: Envelope): Unit = Unit
+
+    override suspend fun reject(envelope: Envelope): Unit = Unit
+}
 
 class DefaultTransportRegistryTest :
     FunSpec({
-        test("returns the configured transport name for a routed message type") {
-            // Arrange
-            val registry = DefaultTransportRegistry(mapOf(Greet::class to "greetings"))
+        test("resolves a registered transport by name") {
+            val registry = DefaultTransportRegistry(mapOf("sync" to StubTransport, "async" to StubTransport))
 
-            // Act + Assert
-            registry.getTransport(Greet::class) shouldBe "greetings"
+            registry.get("async") shouldBe StubTransport
         }
 
-        test("returns null for a message type with no route") {
-            // Arrange
-            val registry = DefaultTransportRegistry()
+        test("exposes all registered transports keyed by name") {
+            val registry = DefaultTransportRegistry(mapOf("sync" to StubTransport, "async" to StubTransport))
 
-            // Act + Assert
-            registry.getTransport(Greet::class).shouldBeNull()
+            registry.all() shouldBe mapOf("sync" to StubTransport, "async" to StubTransport)
         }
 
-        test("falls back to the catch-all transport for a message type with no route of its own") {
-            // Arrange
-            val registry = DefaultTransportRegistry(mapOf(Greet::class to "greetings"), fallback = "sync")
+        test("lists registered names when looking up an unknown transport") {
+            val registry = DefaultTransportRegistry(mapOf("sync" to StubTransport, "async" to StubTransport))
 
-            // Act + Assert
-            registry.getTransport(Greet::class) shouldBe "greetings"
-            registry.getTransport(Message::class) shouldBe "sync"
+            val failure =
+                shouldThrow<IllegalStateException> {
+                    registry.get("missing")
+                }
+
+            failure.message shouldContain "Transport 'missing' not found - registered: [async, sync]"
         }
     })

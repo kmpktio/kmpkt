@@ -2,21 +2,21 @@ package io.kmpkt.messenger.clikt
 
 import com.github.ajalt.clikt.core.CliktError
 import com.github.ajalt.clikt.core.parse
+import com.github.ajalt.clikt.testing.test
 import io.kmpkt.messenger.bus.MessageBus
 import io.kmpkt.messenger.bus.MessengerCatalog
 import io.kmpkt.messenger.message.Envelope
 import io.kmpkt.messenger.message.Message
 import io.kmpkt.messenger.stamp.BusNameStamp
 import io.kmpkt.messenger.transport.InMemoryTransport
+import io.kmpkt.test.TestClock
 import io.kmpkt.worker.WorkLock
 import io.kotest.assertions.throwables.shouldThrow
 import io.kotest.core.spec.style.FunSpec
 import io.kotest.matchers.shouldBe
 import kotlinx.coroutines.runBlocking
-import java.time.Clock
-import java.time.Instant
-import java.time.ZoneId
-import java.time.ZoneOffset
+import kotlin.time.Duration.Companion.milliseconds
+import kotlin.time.Duration.Companion.seconds
 
 private data class TestJob(val name: String) : Message
 
@@ -56,28 +56,39 @@ class ConsumeCommandTest :
             events.handled.map { (it.message as TestJob).name } shouldBe listOf("normal")
         }
 
-        test("supports --bus override and --all") {
+        test("consumes all configured transports when --all is passed") {
+            val queue = InMemoryTransport()
+            val commands = RecordingBus()
+            runBlocking {
+                queue.send(Envelope(TestJob("queued")).with(BusNameStamp("commands")))
+            }
+            val catalog = MessengerCatalog(buses = mapOf("commands" to commands), transports = mapOf("queue" to queue))
+
+            ConsumeCommand(catalog).parse(listOf("--all", "--limit", "1", "--sleep", "1"))
+
+            commands.handled.map { (it.message as TestJob).name } shouldBe listOf("queued")
+        }
+
+        test("routes consumed envelopes to --bus override instead of BusNameStamp") {
             val queue = InMemoryTransport()
             val commands = RecordingBus()
             val events = RecordingBus()
-
             runBlocking {
                 queue.send(Envelope(TestJob("forced")).with(BusNameStamp("commands")))
             }
-
             val catalog =
                 MessengerCatalog(
                     buses = mapOf("commands" to commands, "events" to events),
                     transports = mapOf("queue" to queue),
                 )
 
-            ConsumeCommand(catalog).parse(listOf("--all", "--bus", "events", "--limit", "1", "--sleep", "1"))
+            ConsumeCommand(catalog).parse(listOf("queue", "--bus", "events", "--limit", "1", "--sleep", "1"))
 
             commands.handled shouldBe emptyList()
             events.handled.map { (it.message as TestJob).name } shouldBe listOf("forced")
         }
 
-        test("acquires WorkLock when --lock is specified and fails when no WorkLock is available") {
+        test("acquires WorkLock when --lock is specified") {
             val queue = InMemoryTransport()
             val bus = RecordingBus()
             runBlocking { queue.send(Envelope(TestJob("locked")).with(BusNameStamp("default"))) }
@@ -96,25 +107,65 @@ class ConsumeCommandTest :
             val catalog = MessengerCatalog(buses = mapOf("default" to bus), transports = mapOf("queue" to queue))
 
             ConsumeCommand(catalog, workLock = lock).parse(listOf("queue", "--lock", "worker-lock", "--limit", "1", "--sleep", "1"))
+
             acquiredLocks shouldBe listOf("worker-lock")
+        }
+
+        test("fails when --lock is specified without a configured WorkLock") {
+            val catalog = MessengerCatalog(buses = mapOf("default" to RecordingBus()), transports = mapOf("queue" to InMemoryTransport()))
 
             shouldThrow<CliktError> {
                 ConsumeCommand(catalog, workLock = null).parse(listOf("queue", "--lock", "worker-lock", "--limit", "1"))
             }
         }
 
-        test("fails on missing receiver or unknown transport") {
+        test("fails when neither receiver names nor --all are provided") {
             val catalog = MessengerCatalog(buses = emptyMap(), transports = mapOf("queue" to InMemoryTransport()))
 
             shouldThrow<CliktError> {
                 ConsumeCommand(catalog).parse(emptyList())
             }
-            shouldThrow<CliktError> {
-                ConsumeCommand(catalog).parse(listOf("unknown"))
-            }
+        }
+
+        test("fails when receiver names and --all are passed together") {
+            val catalog = MessengerCatalog(buses = emptyMap(), transports = mapOf("queue" to InMemoryTransport()))
+
             shouldThrow<CliktError> {
                 ConsumeCommand(catalog).parse(listOf("queue", "--all"))
             }
+        }
+
+        test("fails when a requested receiver is unknown") {
+            val catalog = MessengerCatalog(buses = emptyMap(), transports = mapOf("queue" to InMemoryTransport()))
+
+            shouldThrow<CliktError> {
+                ConsumeCommand(catalog).parse(listOf("unknown"))
+            }
+        }
+
+        test("fails when --all is passed and no transports are configured") {
+            val catalog = MessengerCatalog(buses = emptyMap(), transports = emptyMap())
+
+            shouldThrow<CliktError> {
+                ConsumeCommand(catalog).parse(listOf("--all"))
+            }
+        }
+
+        test("fails when --bus names an unknown bus") {
+            val catalog = MessengerCatalog(buses = mapOf("default" to RecordingBus()), transports = mapOf("queue" to InMemoryTransport()))
+
+            shouldThrow<CliktError> {
+                ConsumeCommand(catalog).parse(listOf("queue", "--bus", "unknown"))
+            }
+        }
+
+        test("rejects non-positive limits and negative sleep") {
+            val catalog = MessengerCatalog(buses = mapOf("default" to RecordingBus()), transports = mapOf("queue" to InMemoryTransport()))
+
+            shouldThrow<CliktError> { ConsumeCommand(catalog).parse(listOf("queue", "--limit", "0")) }
+            shouldThrow<CliktError> { ConsumeCommand(catalog).parse(listOf("queue", "--time-limit", "0")) }
+            shouldThrow<CliktError> { ConsumeCommand(catalog).parse(listOf("queue", "--failure-limit", "-1")) }
+            shouldThrow<CliktError> { ConsumeCommand(catalog).parse(listOf("queue", "--sleep", "-1")) }
         }
 
         test("stops after --failure-limit failed messages") {
@@ -149,15 +200,7 @@ class ConsumeCommandTest :
 
         test("stops once --time-limit deadline is reached") {
             val queue = InMemoryTransport()
-            var now = Instant.parse("2026-01-01T00:00:00Z")
-            val mutableClock =
-                object : Clock() {
-                    override fun getZone(): ZoneId = ZoneOffset.UTC
-
-                    override fun withZone(zone: ZoneId): Clock = this
-
-                    override fun instant(): Instant = now
-                }
+            val clock = TestClock()
             val bus =
                 object : MessageBus {
                     val seen = mutableListOf<String>()
@@ -166,7 +209,7 @@ class ConsumeCommandTest :
 
                     override suspend fun dispatch(envelope: Envelope): Envelope {
                         seen += (envelope.message as TestJob).name
-                        now = now.plusSeconds(5)
+                        clock.advance(5.seconds)
                         return envelope
                     }
                 }
@@ -178,17 +221,24 @@ class ConsumeCommandTest :
 
             val catalog = MessengerCatalog(buses = mapOf("default" to bus), transports = mapOf("queue" to queue))
 
-            ConsumeCommand(catalog, clock = mutableClock).parse(listOf("queue", "--time-limit", "5", "--sleep", "1"))
+            ConsumeCommand(catalog, clock = clock).parse(listOf("queue", "--time-limit", "5", "--sleep", "1"))
 
             bus.seen shouldBe listOf("first")
         }
 
-        test("rejects non-positive limits") {
-            val catalog = MessengerCatalog(buses = emptyMap(), transports = mapOf("queue" to InMemoryTransport()))
+        test("idles until --time-limit expires when queue stays empty") {
+            val queue = InMemoryTransport()
+            val clock = TestClock(autoAdvance = 400.milliseconds)
+            val catalog = MessengerCatalog(buses = mapOf("default" to RecordingBus()), transports = mapOf("queue" to queue))
 
-            shouldThrow<CliktError> { ConsumeCommand(catalog).parse(listOf("queue", "--limit", "0")) }
-            shouldThrow<CliktError> { ConsumeCommand(catalog).parse(listOf("queue", "--time-limit", "0")) }
-            shouldThrow<CliktError> { ConsumeCommand(catalog).parse(listOf("queue", "--failure-limit", "-1")) }
-            shouldThrow<CliktError> { ConsumeCommand(catalog).parse(listOf("queue", "--sleep", "-1")) }
+            ConsumeCommand(catalog, clock = clock).parse(listOf("queue", "--time-limit", "1", "--sleep", "10"))
+
+            clock.instant() shouldBe TestClock.DEFAULT_INSTANT.plusMillis(1600)
+        }
+
+        test("prints command help") {
+            val catalog = MessengerCatalog(buses = mapOf("default" to RecordingBus()), transports = mapOf("queue" to InMemoryTransport()))
+
+            ConsumeCommand(catalog).test("--help").stdout.isNotBlank() shouldBe true
         }
     })

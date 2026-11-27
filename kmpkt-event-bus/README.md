@@ -4,7 +4,7 @@ Fan-out event publishing facade over KmpKt Messenger. Events are dispatched onto
 
 ## Building Blocks
 
-| Symbol | Purpose |
+| Symbol | Description |
 | --- | --- |
 | `Event` | Marker interface for domain or application facts |
 | `EventHandler` | Handler invoked when a matching `Event` is published |

@@ -5,6 +5,7 @@ import io.kmpkt.messenger.message.Envelope
 import io.kmpkt.messenger.retry.MultiplierRetryStrategy
 import io.kmpkt.messenger.retry.RetryScheduledException
 import io.kmpkt.messenger.stamp.DelayStamp
+import io.kmpkt.messenger.stamp.ErrorDetailsStamp
 import io.kmpkt.messenger.stamp.ReceivedStamp
 import io.kmpkt.messenger.stamp.RedeliveryStamp
 import io.kmpkt.messenger.transport.InMemoryTransport
@@ -76,7 +77,14 @@ class RetryMiddlewareTest :
                 middleware.handle(envelope) { throw RuntimeException("boom") }
             }
 
-            transport.pending() shouldBe listOf(envelope.with(RedeliveryStamp(1), DelayStamp(2.seconds)))
+            transport.pending() shouldBe
+                listOf(
+                    envelope.with(
+                        RedeliveryStamp(1),
+                        DelayStamp(2.seconds),
+                        ErrorDetailsStamp("RuntimeException", "boom"),
+                    ),
+                )
         }
 
         test("rethrows original failure without re-sending when retries are exhausted") {

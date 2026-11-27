@@ -4,7 +4,7 @@ Typed command-dispatching facade over KmpKt Messenger. Each command type maps to
 
 ## Building Blocks
 
-| Symbol | Purpose |
+| Symbol | Description |
 | --- | --- |
 | `Command` | Marker interface for write-intent messages |
 | `CommandHandler` | Single-responsibility handler for a `Command` subtype |

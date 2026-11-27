@@ -27,6 +27,7 @@ import io.kmpkt.messenger.retry.MultiplierRetryStrategy
 import io.kmpkt.messenger.transport.InMemoryTransport
 import io.kmpkt.messenger.transport.SyncTransport
 import io.kmpkt.messenger.transport.Transport
+import io.kmpkt.messenger.transport.registry.TransportRegistry
 import io.kotest.assertions.throwables.shouldThrow
 import io.kotest.core.spec.style.FunSpec
 import io.kotest.matchers.collections.shouldBeEmpty
@@ -99,7 +100,6 @@ private fun classLiteral(type: KClass<*>): Argument =
         ),
     )
 
-/** The component through the whole pipeline, over a fake of what KSP would know about the messenger's classes. */
 private class Compilation(
     vararg entryPoints: Pair<String, ServiceKey>,
     configure: (ContainerBuilder) -> Unit = {},
@@ -150,10 +150,8 @@ private fun registry(name: String? = null) = ServiceKey(typeRef<HandlerRegistry>
 class MessengerComponentTest :
     FunSpec({
         test("an application that configures nothing has one bus, named default and bound without a name as well") {
-            // Act
             val compilation = Compilation("bus" to bus(), "named" to bus("default"), "handlers" to registry())
 
-            // Assert
             compilation.errors.shouldBeEmpty()
             compilation.entryPoint("bus") shouldBe "messenger.bus.default"
             compilation.entryPoint("named") shouldBe "messenger.bus.default"
@@ -172,7 +170,6 @@ class MessengerComponentTest :
         }
 
         test("every configured bus gets its own registry, policy and chain, in the order its middleware was named") {
-            // Act
             val compilation =
                 Compilation("command" to bus("command"), "event" to bus("event")) { container ->
                     container.configure(MessengerComponent::class) {
@@ -183,7 +180,6 @@ class MessengerComponentTest :
                         bus("event") {
                             policy = HandlerPolicy.MULTIPLE
                         }
-                        // Declared again: adds to the bus rather than replacing it.
                         bus("event") {
                             middleware<Inner>()
                         }
@@ -192,7 +188,6 @@ class MessengerComponentTest :
                     container.service<Inner>()
                 }
 
-            // Assert
             compilation.errors.shouldBeEmpty()
             compilation.arguments("messenger.bus.command") shouldBe
                 mapOf(
@@ -224,32 +219,35 @@ class MessengerComponentTest :
         }
 
         test("several buses have no default unless one is named") {
-            // Arrange
-            val twoBuses: MessengerOptions.() -> Unit = {
-                bus("command")
-                bus("event")
-            }
-
-            // Act
-            val without = Compilation("bus" to bus()) { it.configure(MessengerComponent::class, twoBuses) }
-            val with =
-                Compilation("bus" to bus(), "handlers" to registry()) {
-                    it.configure(MessengerComponent::class, twoBuses)
+            val without =
+                Compilation("bus" to bus()) {
                     it.configure(MessengerComponent::class) {
-                        defaultBus = BusRef("event")
+                        bus("command")
+                        bus("event")
                     }
                 }
 
-            // Assert
             without.compiled.shouldBeNull()
             without.errors shouldContainExactly
                 listOf("Entry point \"bus\" asks for io.kmpkt.messenger.bus.MessageBus, but no service is bound to that.")
+        }
+
+        test("binds defaultBus without a qualifier when explicitly configured among multiple buses") {
+            val with =
+                Compilation("bus" to bus(), "handlers" to registry()) {
+                    it.configure(MessengerComponent::class) {
+                        bus("command")
+                        val event = bus("event")
+                        defaultBus = event
+                    }
+                }
+
+            with.errors.shouldBeEmpty()
             with.entryPoint("bus") shouldBe "messenger.bus.event"
             with.entryPoint("handlers") shouldBe "messenger.bus.event.handlers"
         }
 
         test("a default bus that was never configured is an error") {
-            // Act & Assert
             shouldThrow<IllegalArgumentException> {
                 Compilation {
                     it.configure(MessengerComponent::class) {
@@ -261,7 +259,6 @@ class MessengerComponentTest :
         }
 
         test("a handler is found by being a MessageHandler, routed by its message type, on every bus unless it names one") {
-            // Act
             val compilation =
                 Compilation("command" to bus("command"), "event" to bus("event")) { container ->
                     container.configure(MessengerComponent::class) {
@@ -277,7 +274,6 @@ class MessengerComponentTest :
                     }
                 }
 
-            // Assert
             compilation.errors.shouldBeEmpty()
             compilation.arguments("messenger.bus.command.handlers") shouldBe
                 mapOf(
@@ -304,27 +300,22 @@ class MessengerComponentTest :
         }
 
         test("a bus without handlers gets an empty map") {
-            // Act
             val compilation = Compilation("bus" to bus())
 
-            // Assert
             compilation.arguments("messenger.bus.default.handlers") shouldBe mapOf("handlers" to Argument.Dictionary(emptyList()))
         }
 
         test("a handler for a bus that does not exist, or of no recognisable message, fails the compilation") {
-            // Act
             val compilation =
                 Compilation("bus" to bus()) { container ->
                     container.service<PingHandler> {
                         tag(MessageHandlerTag(bus = "comand"))
                     }
-                    // Tagged by hand, but not a MessageHandler at all.
                     container.service<Outer> {
                         tag(MessageHandlerTag())
                     }
                 }
 
-            // Assert
             compilation.compiled.shouldBeNull()
             compilation.errors shouldContainExactly
                 listOf(
@@ -336,7 +327,6 @@ class MessengerComponentTest :
         }
 
         test("handles puts each kind of handler on its own bus; a handler that names a bus goes there regardless") {
-            // Act
             val compilation =
                 Compilation("command" to bus("command"), "event" to bus("event"), "other" to bus("other")) { container ->
                     container.messenger {
@@ -346,7 +336,6 @@ class MessengerComponentTest :
                         bus("event") {
                             handles<EventLike<*>>()
                         }
-                        // Says nothing: takes every handler that does not name a bus.
                         bus("other")
                     }
                     container.service<CommandLikeHandler>()
@@ -356,7 +345,6 @@ class MessengerComponentTest :
                     }
                 }
 
-            // Assert
             fun handlersOf(bus: String) =
                 (compilation.arguments("messenger.bus.$bus.handlers").getValue("handlers") as Argument.Dictionary)
                     .entries
@@ -370,10 +358,13 @@ class MessengerComponentTest :
                 listOf(byId(CommandLikeHandler::class.qualifiedName!!), byId(EventLikeHandler::class.qualifiedName!!))
         }
 
-        test("a bus that routes gets a sending middleware in front, a routing table, the queue and a sync transport of its own") {
-            // Act
+        test("a bus that routes gets a sending middleware, a transport router, a bus transport registry, and a sync transport") {
             val compilation =
-                Compilation("bus" to bus("command"), "async" to ServiceKey(typeRef<Transport>(), "async")) { container ->
+                Compilation(
+                    "bus" to bus("command"),
+                    "async" to ServiceKey(typeRef<Transport>(), "async"),
+                    "registry" to ServiceKey(typeRef<TransportRegistry>()),
+                ) { container ->
                     container.messenger {
                         val async = transport<Queue>("async")
 
@@ -385,9 +376,9 @@ class MessengerComponentTest :
                     container.service<Outer>()
                 }
 
-            // Assert
             compilation.errors.shouldBeEmpty()
             compilation.entryPoint("async") shouldBe "messenger.transport.async"
+            compilation.entryPoint("registry") shouldBe "messenger.transports"
             compilation.arguments("messenger.bus.command")["middleware"] shouldBe
                 Argument.Sequence(
                     listOf(
@@ -399,6 +390,11 @@ class MessengerComponentTest :
                 )
             compilation.arguments("messenger.bus.command.send") shouldBe
                 mapOf(
+                    "transportRouter" to byId("messenger.bus.command.routes"),
+                    "clock" to byId("java.time.Clock"),
+                )
+            compilation.arguments("messenger.bus.command.transports") shouldBe
+                mapOf(
                     "transports" to
                         Argument.Dictionary(
                             listOf(
@@ -406,11 +402,10 @@ class MessengerComponentTest :
                                 literal("sync") to byId("messenger.bus.command.transport.sync"),
                             ),
                         ),
-                    "transportRegistry" to byId("messenger.bus.command.routes"),
-                    "clock" to byId("java.time.Clock"),
                 )
             compilation.arguments("messenger.bus.command.routes") shouldBe
                 mapOf(
+                    "transportRegistry" to byId("messenger.bus.command.transports"),
                     "routes" to Argument.Dictionary(listOf(classLiteral(Ping::class) to literal("async"))),
                     "fallback" to literal("sync"),
                 )
@@ -425,7 +420,6 @@ class MessengerComponentTest :
         }
 
         test("a bus's default transport is where everything without a route goes, a queue included") {
-            // Act
             val compilation =
                 Compilation("bus" to bus("command")) { container ->
                     container.messenger {
@@ -437,19 +431,16 @@ class MessengerComponentTest :
                     }
                 }
 
-            // Assert
             compilation.errors.shouldBeEmpty()
             compilation.arguments("messenger.bus.command.routes")["fallback"] shouldBe literal("async")
-            compilation.arguments("messenger.bus.command.send")["transports"] shouldBe
+            compilation.arguments("messenger.bus.command.transports")["transports"] shouldBe
                 Argument.Dictionary(listOf(literal("async") to byId("messenger.transport.async")))
         }
 
         test("a retry on the sync transport is that transport's strategy, with exactly the settings that were made") {
-            // Act
             val compilation =
                 Compilation("command" to bus("command"), "event" to bus("event")) { container ->
                     container.messenger {
-                        // Declared under the name every bus defaults to, so neither bus has to say so.
                         transport<SyncTransport>("sync") {
                             retry<MultiplierRetryStrategy> {
                                 maxRetries = 1
@@ -463,7 +454,6 @@ class MessengerComponentTest :
                     }
                 }
 
-            // Assert
             compilation.errors.shouldBeEmpty()
             compilation.arguments("messenger.bus.command.transport.sync")["retryStrategy"] shouldBe byId("messenger.transport.sync.retry")
             compilation.arguments("messenger.bus.event.transport.sync")["retryStrategy"] shouldBe byId("messenger.transport.sync.retry")
@@ -480,10 +470,8 @@ class MessengerComponentTest :
         }
 
         test("a strategy without settings is just named, and a setting that was not made cannot be read back") {
-            // Arrange
             var unset: Throwable? = null
 
-            // Act
             val compilation =
                 Compilation("bus" to bus("command")) { container ->
                     container.messenger {
@@ -503,7 +491,6 @@ class MessengerComponentTest :
                     }
                 }
 
-            // Assert
             compilation.errors.shouldBeEmpty()
             unset?.message shouldBe "\"maxRetries\" was not set here; the strategy's own default applies"
             compilation.arguments("messenger.transport.sync.retry")["multiplier"] shouldBe literal(3.0)
@@ -511,7 +498,6 @@ class MessengerComponentTest :
         }
 
         test("a failure transport is the transport's own, else the global one - and a queue never its own") {
-            // Act
             val compilation =
                 Compilation(
                     "command" to bus("command"),
@@ -535,7 +521,6 @@ class MessengerComponentTest :
                     }
                 }
 
-            // Assert
             compilation.errors.shouldBeEmpty()
             compilation.arguments("messenger.bus.command.transport.sync")["failureTransport"] shouldBe byId("messenger.transport.other")
             compilation.arguments("messenger.bus.event.transport.audit")["failureTransport"] shouldBe byId("messenger.transport.failed")
@@ -543,7 +528,6 @@ class MessengerComponentTest :
         }
 
         test("a sync transport cannot be a failure transport: it would handle the message again instead of keeping it") {
-            // Act
             val compilation =
                 Compilation("bus" to bus()) { container ->
                     container.messenger {
@@ -555,7 +539,6 @@ class MessengerComponentTest :
                     }
                 }
 
-            // Assert
             compilation.compiled.shouldBeNull()
             compilation.errors shouldContainExactly
                 listOf(
@@ -564,8 +547,38 @@ class MessengerComponentTest :
                 )
         }
 
+        test("rejects duplicate transport names in messenger DSL") {
+            shouldThrow<IllegalArgumentException> {
+                Compilation("bus" to bus()) { container ->
+                    container.messenger {
+                        transport<Queue>("async")
+                        transport<Queue>("async")
+                    }
+                }
+            }
+        }
+
+        test("rejects blank transport name in messenger DSL") {
+            shouldThrow<IllegalArgumentException> {
+                Compilation("bus" to bus()) { container ->
+                    container.messenger {
+                        transport<Queue>("  ")
+                    }
+                }
+            }
+        }
+
+        test("rejects blank bus name in messenger DSL") {
+            shouldThrow<IllegalArgumentException> {
+                Compilation("bus" to bus()) { container ->
+                    container.messenger {
+                        bus(" ")
+                    }
+                }
+            }
+        }
+
         test("defaultMiddleware can disable send and handle while keeping retry") {
-            // Act
             val compilation =
                 Compilation("bus" to bus("relay")) { container ->
                     container.messenger {
@@ -583,7 +596,6 @@ class MessengerComponentTest :
                     container.service<Outer>()
                 }
 
-            // Assert
             compilation.errors.shouldBeEmpty()
             compilation.arguments("messenger.bus.relay")["middleware"] shouldBe
                 Argument.Sequence(
@@ -596,7 +608,6 @@ class MessengerComponentTest :
         }
 
         test("defaultMiddleware none disables send, retry, and handle") {
-            // Act
             val compilation =
                 Compilation("bus" to bus("custom")) { container ->
                     container.messenger {
@@ -611,7 +622,6 @@ class MessengerComponentTest :
                     container.service<Outer>()
                 }
 
-            // Assert
             compilation.errors.shouldBeEmpty()
             compilation.arguments("messenger.bus.custom")["middleware"] shouldBe
                 Argument.Sequence(listOf(byId(Outer::class.qualifiedName!!)))

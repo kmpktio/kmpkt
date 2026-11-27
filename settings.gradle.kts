@@ -1,5 +1,6 @@
 rootProject.name = "kmpkt"
 
+include("test-support")
 include("kmpkt-di")
 include("kmpkt-di-compiler-api")
 include("kmpkt-di-compiler")

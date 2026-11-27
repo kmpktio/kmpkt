@@ -4,7 +4,7 @@ Durable transport, transactional middleware, and distributed locking adapters co
 
 ## Building Blocks
 
-| Symbol | Purpose |
+| Symbol | Description |
 | --- | --- |
 | `PersistentTransport` | `SetupableTransport` and `ListableTransport` backed by a `WorkQueue` |
 | `TransactionMiddleware` | Middleware wrapping downstream execution in `Persistence.inTransaction` |
@@ -26,7 +26,7 @@ dependencies {
 
 ## DI Setup
 
-Bind an `EnvelopeSerializer` implementation, declare a `PersistentTransport`, and attach `TransactionMiddleware` in `src/di/kotlin`:
+Bind an `EnvelopeSerializer` implementation, declare a `PersistentTransport` via `transport<PersistentTransport>("outbox")`, and attach `TransactionMiddleware` in `src/di/kotlin`:
 
 ```kotlin
 // src/di/kotlin/AppConfiguration.kt
@@ -54,7 +54,7 @@ class AppConfiguration : Configuration<MyApp> {
 
 ## Usage
 
-Implement `EnvelopeSerializer` in `src/main/kotlin` and dispatch through your configured bus; `PersistentTransport` enqueues and acknowledges envelopes inside `WorkQueue` transactions:
+Implement `EnvelopeSerializer` in `src/main/kotlin`, then dispatch through your configured bus; `PersistentTransport` enqueues and acknowledges envelopes inside `WorkQueue` transactions:
 
 ```kotlin
 // src/main/kotlin/MyEnvelopeSerializer.kt
@@ -67,17 +67,20 @@ class MyEnvelopeSerializer : EnvelopeSerializer {
 }
 ```
 
-Provision the underlying queue tables via `SetupTransportsCommand` (`messenger:setup-transports`) or `PersistentTransport.setup()`.
+Provision the underlying queue tables via `SetupTransportsCommand` (`messenger:setup-transports`) or `PersistentTransport.setup()`. See [kmpkt-messenger](../kmpkt-messenger/README.md#consuming-queued-transports) for running CLI or in-process queue workers.
 
 ## Extending
 
 ### Custom `WorkQueue`
 
-Bind a `WorkQueue` under the transport's qualifier name in `src/di/kotlin` to override automatic queue provisioning:
+`WirePersistentTransportsPass` automatically provisions a `WorkQueue` via `Persistence.workQueue(Outbox.name)`. Override it in `src/di/kotlin` under the transport marker's `name` only when you want custom storage behavior for that queue — for example, a dedicated SQL table and `pageSize` via `JdbcWorkQueue`, priority-ordered `claim()`, or a metrics decorator:
 
 ```kotlin
-service<CustomWorkQueue>("outbox") {
-    bind<WorkQueue>("outbox")
+fun highPrioQueue(dataSource: DataSource): WorkQueue =
+    JdbcWorkQueue(dataSource = dataSource, queue = "outbox_high_prio", pageSize = 500)
+
+factory(::highPrioQueue) {
+    bind<WorkQueue>(Outbox.name)
 }
 ```
 

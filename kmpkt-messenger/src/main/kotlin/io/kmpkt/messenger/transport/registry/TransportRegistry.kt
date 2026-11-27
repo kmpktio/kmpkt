@@ -1,10 +1,12 @@
 package io.kmpkt.messenger.transport.registry
 
-import io.kmpkt.messenger.message.Message
-import kotlin.reflect.KClass
+import io.kmpkt.messenger.transport.Transport
 
-/** Maps a [Message] type to the name of the transport it should be sent through. */
+/** Resolves registered [Transport] instances by name. */
 public interface TransportRegistry {
-    /** The transport name for [messageType], or `null` if it should be handled synchronously instead. */
-    public fun getTransport(messageType: KClass<out Message>): String?
+    /** Resolves the registered [Transport] for [name], or throws [IllegalStateException] if unknown. */
+    public fun get(name: String): Transport
+
+    /** Snapshot of all registered transports keyed by name. */
+    public fun all(): Map<String, Transport>
 }

@@ -4,7 +4,7 @@ Clikt CLI commands for KmpKt Messenger to consume queued transports, provision `
 
 ## Building Blocks
 
-| Symbol | Purpose |
+| Symbol | Description |
 | --- | --- |
 | `ConsumeCommand` | Clikt command (`messenger:consume`) consuming prioritized transports with limit, sleep, and lock options |
 | `SetupTransportsCommand` | Clikt command (`messenger:setup-transports`) provisioning selected or all `SetupableTransport` instances |
