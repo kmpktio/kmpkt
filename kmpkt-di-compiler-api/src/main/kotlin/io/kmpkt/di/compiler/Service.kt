@@ -96,6 +96,16 @@ public sealed interface Instantiation {
     public data class External(
         val parameterName: String,
     ) : Instantiation
+
+    /** Resolved from the parent (root) container inside a scoped child context. */
+    public data class Parent(
+        val id: ServiceId,
+    ) : Instantiation
+
+    /** Compiler-generated [io.kmpkt.di.ContextScope] factory registered in the root container. */
+    public data class ContextScope(
+        val name: String,
+    ) : Instantiation
 }
 
 public enum class Scope {

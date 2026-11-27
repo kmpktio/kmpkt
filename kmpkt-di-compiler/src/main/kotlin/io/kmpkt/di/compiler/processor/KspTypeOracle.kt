@@ -107,7 +107,7 @@ internal class KspTypeOracle(
                 is Instantiation.Function -> function(type, instantiation)
                 is Instantiation.ObjectFunction -> objectFunction(instantiation)
                 is Instantiation.StaticFactory -> staticFactory(type, instantiation)
-                is Instantiation.External -> null
+                is Instantiation.External, is Instantiation.Parent, is Instantiation.ContextScope -> null
             }
 
         return callable?.parameters?.map { parameter ->
@@ -117,6 +117,19 @@ internal class KspTypeOracle(
                 hasDefault = parameter.hasDefault,
             )
         }
+    }
+
+    override fun properties(type: TypeRef): List<Parameter> {
+        val decl = declaration(type) ?: return emptyList()
+        return decl
+            .getAllProperties()
+            .filter { it.isAbstract() }
+            .map { property ->
+                Parameter(
+                    name = property.simpleName.asString(),
+                    type = property.type.resolve().toTypeRef(),
+                )
+            }.toList()
     }
 
     @OptIn(KspExperimental::class)

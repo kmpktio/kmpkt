@@ -34,6 +34,9 @@ public interface TypeOracle {
      * not for which packages there are.
      */
     public fun classesIn(packageName: String): List<ClassInfo>
+
+    /** Abstract `val` properties declared on [type] (including inherited ones), used to auto-expose `view<V>()` entry points. */
+    public fun properties(type: TypeRef): List<Parameter> = emptyList()
 }
 
 /** A class as `discover` sees it: enough to decide whether it could be a service, and what it would be bound to. */

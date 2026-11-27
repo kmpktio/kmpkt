@@ -301,4 +301,133 @@ class ContainerBuilderTest :
             diagnostics.errors shouldContainExactly listOf("broken")
             diagnostics.warnings shouldContainExactly listOf("careful")
         }
+
+        test("factory accepts companion object factory functions") {
+            val fixture = Fixture()
+
+            fixture.container.factory(CompanionProduct::create)
+
+            val definition = fixture.container.definitions.getValue(ServiceId.of<CompanionProduct>())
+            definition.instantiation shouldBe Instantiation.ObjectFunction(typeRef<CompanionProduct.Companion>(), "create")
+        }
+
+        test("rejects view declarations on the root container outside a context block") {
+            val fixture = Fixture()
+
+            fixture.container.view<SampleView>()
+
+            fixture.diagnostics.hasErrors shouldBe true
+        }
+
+        test("registers scoped child container with views and merges context extensions") {
+            val fixture = Fixture()
+            fixture.types.declare<SampleHandle>(
+                supertypes = listOf(TypeRef("io.kmpkt.di.ContextHandle", listOf(TypeArgument.Of(typeRef<SampleDomain>())))),
+            )
+
+            fixture.container.context<SampleContext, SampleHandle, SampleInput> {
+                service<InMemoryMessageBus>()
+                view<SampleView>()
+            }
+            fixture.container.context<SampleContext> {
+                service<RetryConfig>()
+            }
+
+            fixture.diagnostics.hasErrors shouldBe false
+            val ctx = fixture.container.contexts.getValue(typeRef<SampleContext>().qualifiedName)
+            ctx.contextType shouldBe typeRef<SampleDomain>()
+            ctx.inputType shouldBe typeRef<SampleInput>()
+            ctx.handleType shouldBe typeRef<SampleHandle>()
+            ctx.builder.views shouldContainExactly listOf(typeRef<SampleView>())
+            ctx.builder.definitions.keys
+                .toList() shouldContainExactly
+                listOf(
+                    ServiceId.of<SampleDomain>(),
+                    ServiceId.of<InMemoryMessageBus>(),
+                    ServiceId.of<RetryConfig>(),
+                )
+        }
+
+        test("context extension before declaration is filled in when declared later") {
+            val fixture = Fixture()
+            fixture.types.declare<SampleHandle>(
+                supertypes = listOf(TypeRef("io.kmpkt.di.ContextHandle", listOf(TypeArgument.Of(typeRef<SampleDomain>())))),
+            )
+
+            fixture.container.context<SampleContext> {
+                service<RetryConfig>()
+            }
+            fixture.container.context<SampleContext, SampleHandle, SampleInput> {
+                service<InMemoryMessageBus>()
+            }
+
+            val ctx = fixture.container.contexts.getValue(typeRef<SampleContext>().qualifiedName)
+            ctx.contextType shouldBe typeRef<SampleDomain>()
+            ctx.inputType shouldBe typeRef<SampleInput>()
+            ctx.handleType shouldBe typeRef<SampleHandle>()
+            ctx.builder.entryPoints.map { it.name } shouldContainExactly listOf("context")
+            ctx.builder.definitions.keys
+                .toList() shouldContainExactly
+                listOf(
+                    ServiceId.of<RetryConfig>(),
+                    ServiceId.of<SampleDomain>(),
+                    ServiceId.of<InMemoryMessageBus>(),
+                )
+        }
+
+        test("context declaration fails when ContextHandle has no type argument") {
+            val fixture = Fixture()
+            fixture.types.declare<RawSampleHandle>(
+                supertypes = listOf(TypeRef("io.kmpkt.di.ContextHandle")),
+            )
+
+            fixture.container.context<SampleContext, RawSampleHandle, SampleInput>()
+
+            fixture.diagnostics.hasErrors shouldBe true
+        }
+
+        test("allows idempotent context redeclaration with identical types") {
+            val fixture = Fixture()
+            fixture.types.declare<SampleHandle>(
+                supertypes = listOf(TypeRef("io.kmpkt.di.ContextHandle", listOf(TypeArgument.Of(typeRef<SampleDomain>())))),
+            )
+
+            fixture.container.context<SampleContext, SampleHandle, SampleInput>()
+            fixture.container.context<SampleContext, SampleHandle, SampleInput>()
+
+            fixture.diagnostics.hasErrors shouldBe false
+        }
+
+        test("redeclaring a context with conflicting types reports a diagnostic error") {
+            val fixture = Fixture()
+            fixture.types.declare<SampleHandle>(
+                supertypes = listOf(TypeRef("io.kmpkt.di.ContextHandle", listOf(TypeArgument.Of(typeRef<SampleDomain>())))),
+            )
+
+            fixture.container.context<SampleContext, SampleHandle, SampleInput>()
+            fixture.container.context<SampleContext, SampleHandle, RetryConfig>()
+
+            fixture.diagnostics.errors.single() shouldBe
+                "Context \"${typeRef<SampleContext>().qualifiedName}\" is already declared as " +
+                "(${typeRef<SampleDomain>()}, ${typeRef<SampleInput>()}, ${typeRef<SampleHandle>()}) " +
+                "and cannot be redeclared as (${typeRef<SampleDomain>()}, ${typeRef<RetryConfig>()}, ${typeRef<SampleHandle>()})."
+        }
     })
+
+private interface RawSampleHandle : io.kmpkt.di.ContextHandle<SampleDomain>
+
+private class CompanionProduct private constructor() {
+    companion object {
+        fun create(): CompanionProduct = CompanionProduct()
+    }
+}
+
+private object SampleContext : io.kmpkt.di.KmpKtContext
+
+private class SampleDomain
+
+private class SampleInput
+
+private interface SampleHandle : io.kmpkt.di.ContextHandle<SampleDomain>
+
+private interface SampleView

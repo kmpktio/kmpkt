@@ -20,7 +20,10 @@ internal class ResolveTaggedArguments : BuilderPass {
     override fun process(container: ContainerBuilder) {
         container.definitions.values.toList().forEach { definition ->
             val parametersByName =
-                if (definition.instantiation !is Instantiation.External) {
+                if (definition.instantiation !is Instantiation.External &&
+                    definition.instantiation !is Instantiation.Parent &&
+                    definition.instantiation !is Instantiation.ContextScope
+                ) {
                     container.types
                         .parameters(definition.type, definition.instantiation)
                         ?.associateBy { it.name }

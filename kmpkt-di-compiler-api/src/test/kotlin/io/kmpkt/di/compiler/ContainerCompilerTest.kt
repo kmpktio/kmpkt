@@ -424,6 +424,190 @@ class ContainerCompilerTest :
                         "io.kmpkt.di.compiler.Chicken.",
                 )
         }
+
+        test("compiles scoped contexts with module views, parent fallback, and root ContextScope") {
+            // Arrange
+            val fixture = Fixture()
+            fixture.types.declare<RootSharedService>()
+            fixture.types.declare<ScopedInput>()
+            fixture.types.declare<ScopedDomain>(
+                io.kmpkt.di.compiler.fixture
+                    .parameter<ScopedInput>("input"),
+            )
+            fixture.types.declare<ScopedFeatureService>(
+                io.kmpkt.di.compiler.fixture
+                    .parameter<ScopedDomain>("domain"),
+                io.kmpkt.di.compiler.fixture
+                    .parameter<RootSharedService>("root"),
+            )
+            fixture.types.declare<ScopedHandle>(
+                supertypes = listOf(TypeRef("io.kmpkt.di.ContextHandle", listOf(TypeArgument.Of(typeRef<ScopedDomain>())))),
+            )
+            fixture.types.declareProperties<ScopedView>(
+                io.kmpkt.di.compiler.fixture
+                    .parameter<ScopedFeatureService>("feature"),
+            )
+            fixture.types.declare<ScopedContextFactory>(
+                supertypes =
+                    listOf(
+                        TypeRef(
+                            "io.kmpkt.di.ContextFactory",
+                            listOf(TypeArgument.Of(typeRef<ScopedDomain>()), TypeArgument.Of(typeRef<ScopedInput>())),
+                        ),
+                    ),
+            )
+            fixture.container.service<RootSharedService>()
+            fixture.container.service<ScopedContextFactory>()
+
+            val featureComponent =
+                object : SimpleComponent {
+                    override fun ContainerBuilder.register() {
+                        context<TestStoreContext> {
+                            service<ScopedFeatureService>()
+                            view<ScopedView>()
+                        }
+                    }
+                }
+            val config =
+                Configuration<KmpKtApplication.Default> {
+                    context<TestStoreContext, ScopedHandle, ScopedInput>()
+                    entryPoint<io.kmpkt.di.ContextScope<ScopedInput, ScopedHandle>>("stores")
+                }
+
+            // Act
+            val compiled = ContainerCompiler(listOf(featureComponent), listOf(config)).compile(fixture.container)
+
+            // Assert
+            fixture.diagnostics.errors.shouldBeEmpty()
+            val ctx = compiled?.contexts?.single()
+            ctx?.name shouldBe typeRef<TestStoreContext>().qualifiedName
+            ctx?.views shouldContainExactly listOf(typeRef<ScopedView>())
+            ctx?.compiled?.entryPoints?.map { it.name } shouldContainExactly listOf("context", "feature")
+            val featureDef = ctx?.compiled?.definition(ServiceId.of<ScopedFeatureService>())
+            featureDef?.arguments?.keys?.toList() shouldContainExactly listOf("domain", "root")
+            compiled?.definitions?.any { it.instantiation is Instantiation.ContextScope } shouldBe true
+        }
+
+        test("extending an undeclared context fails compilation") {
+            // Arrange
+            val fixture = Fixture()
+            val component =
+                object : SimpleComponent {
+                    override fun ContainerBuilder.register() {
+                        context<TestStoreContext> {
+                            service<InMemoryMessageBus>()
+                        }
+                    }
+                }
+
+            // Act
+            val compiled = ContainerCompiler(listOf(component)).compile(fixture.container)
+
+            // Assert
+            compiled.shouldBeNull()
+            fixture.diagnostics.errors.any { "extended without being declared" in it } shouldBe true
+        }
+
+        test("an unresolvable service inside a scoped context fails compilation") {
+            // Arrange
+            val fixture = Fixture()
+            fixture.types.declare<ScopedInput>()
+            fixture.types.declare<ScopedDomain>()
+            fixture.types.declare<ScopedHandle>(
+                supertypes = listOf(TypeRef("io.kmpkt.di.ContextHandle", listOf(TypeArgument.Of(typeRef<ScopedDomain>())))),
+            )
+            fixture.types.declare<JdbcOutboxMessageBus>(
+                io.kmpkt.di.compiler.fixture
+                    .parameter<DataSource>("dataSource"),
+            )
+            fixture.types.declare<ScopedContextFactory>(
+                supertypes =
+                    listOf(
+                        TypeRef(
+                            "io.kmpkt.di.ContextFactory",
+                            listOf(TypeArgument.Of(typeRef<ScopedDomain>()), TypeArgument.Of(typeRef<ScopedInput>())),
+                        ),
+                    ),
+            )
+            fixture.container.service<ScopedContextFactory>()
+
+            val config =
+                Configuration<KmpKtApplication.Default> {
+                    context<TestStoreContext, ScopedHandle, ScopedInput> {
+                        service<JdbcOutboxMessageBus>()
+                        entryPoint<JdbcOutboxMessageBus>("bus")
+                    }
+                    entryPoint<io.kmpkt.di.ContextScope<ScopedInput, ScopedHandle>>("stores")
+                }
+
+            // Act
+            val compiled = ContainerCompiler(configurations = listOf(config)).compile(fixture.container)
+
+            // Assert
+            compiled.shouldBeNull()
+            fixture.diagnostics.hasErrors shouldBe true
+        }
+
+        test("exposes root services directly on scoped context views") {
+            val fixture = Fixture()
+            fixture.types.declare<RootSharedService>()
+            fixture.types.declare<ScopedDomain>()
+            fixture.types.declareProperties<RootOnlyView>(
+                io.kmpkt.di.compiler.fixture
+                    .parameter<RootSharedService>("root"),
+            )
+            fixture.container.service<RootSharedService>()
+
+            val config =
+                Configuration<KmpKtApplication.Default> {
+                    context<TestStoreContext, ScopedDomain> {
+                        view<RootOnlyView>()
+                    }
+                    entryPoint<io.kmpkt.di.ContextScope<ScopedDomain, io.kmpkt.di.ContextHandle<ScopedDomain>>>("stores")
+                }
+
+            val compiled = ContainerCompiler(configurations = listOf(config)).compile(fixture.container)
+
+            fixture.diagnostics.errors.shouldBeEmpty()
+            val ctx = compiled?.contexts?.single()
+            ctx?.compiled?.entryPoints?.map { it.name } shouldContainExactly listOf("context", "root")
+        }
+
+        test("runs child passes and inherited autoconfigurations inside scoped contexts") {
+            val fixture = Fixture()
+            fixture.types.declare<ScopedDomain>()
+            fixture.types.declareProperties<DispatcherView>(
+                io.kmpkt.di.compiler.fixture
+                    .parameter<EventDispatcher>("dispatcher"),
+            )
+            fixture.container.autoconfigure<DomainEventHandler<*>> {
+                tag(EventHandlerTag())
+            }
+
+            var childPassRan = false
+            val config =
+                Configuration<KmpKtApplication.Default> {
+                    context<TestStoreContext, ScopedDomain> {
+                        service<WhenInvoicePaidReleaseShipment>()
+                        service<EventDispatcher> {
+                            argument<List<DomainEventHandler<*>>>(
+                                io.kmpkt.di.compiler
+                                    .tagged<EventHandlerTag>(),
+                            )
+                        }
+                        addPass({ childPassRan = true })
+                        view<DispatcherView>()
+                    }
+                    entryPoint<io.kmpkt.di.ContextScope<ScopedDomain, io.kmpkt.di.ContextHandle<ScopedDomain>>>("stores")
+                }
+
+            val compiled = ContainerCompiler(configurations = listOf(config)).compile(fixture.container)
+
+            fixture.diagnostics.errors.shouldBeEmpty()
+            childPassRan shouldBe true
+            val ctx = compiled?.contexts?.single()
+            ctx?.compiled?.entryPoints?.map { it.name } shouldContainExactly listOf("context", "dispatcher")
+        }
     })
 
 /** Says when each of its steps ran. */
@@ -463,4 +647,37 @@ private class Chicken : SimpleComponent {
 
 private class Egg : SimpleComponent {
     override val requires: Set<KClass<out Component<*>>> = setOf(Chicken::class)
+}
+
+private object TestStoreContext : io.kmpkt.di.KmpKtContext
+
+private class RootSharedService
+
+private class ScopedInput
+
+private class ScopedDomain(
+    @Suppress("unused") val input: ScopedInput,
+)
+
+private class ScopedContextFactory : io.kmpkt.di.ContextFactory<ScopedDomain, ScopedInput> {
+    override fun create(input: ScopedInput): ScopedDomain = ScopedDomain(input)
+}
+
+private class ScopedFeatureService(
+    @Suppress("unused") val domain: ScopedDomain,
+    @Suppress("unused") val root: RootSharedService,
+)
+
+private interface ScopedHandle : io.kmpkt.di.ContextHandle<ScopedDomain>
+
+private interface ScopedView {
+    val feature: ScopedFeatureService
+}
+
+private interface RootOnlyView {
+    val root: RootSharedService
+}
+
+private interface DispatcherView {
+    val dispatcher: EventDispatcher
 }

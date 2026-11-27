@@ -18,8 +18,8 @@ Pure-Kotlin container model, component SPI, and multi-phase compilation pipeline
 
 | Symbol | Description |
 | --- | --- |
-| `ContainerBuilder`, `@ContainerDsl` | Mutable container builder and DSL scope for registering services, factories, external bindings, discovery packages, autoconfiguration rules, and passes. |
-| `DefinitionConfigurator`, `DiscoveryBuilder`, `AutoconfigureBuilder`, `TaggedService`, `EntryPoint` | DSL configurators for tailoring service definitions, package scanning, autoconfiguration, tagged queries, and root entry points. |
+| `ContainerBuilder`, `@ContainerDsl` | Mutable container builder and DSL scope for registering services, factories, external bindings, scoped `context`s, discovery packages, autoconfiguration rules, and passes. |
+| `DefinitionConfigurator`, `DiscoveryBuilder`, `AutoconfigureBuilder`, `TaggedService`, `EntryPoint`, `ContextDefinition` | DSL configurators for tailoring service definitions, package scanning, autoconfiguration, tagged queries, entry points, and scoped child contexts. |
 | `ServiceId`, `ServiceKey`, `ServiceDefinition`, `TypedArgument`, `Scope`, `Decoration`, `Instantiation` | Core intermediate representation for service identities, scopes (`Shared`, `Prototype`), decorators, and instantiation strategies. |
 | `Argument`, `ServiceReference`, `OnMissing`, `ConstValue` | Argument and constant value model, paired with DSL helpers `service`, `tagged`, `literal`, `env`, and `classLiteral`. |
 | `TypeRef`, `TypeArgument`, `typeRef` | Name-based type representation independent of KSP and `KClass`. |
@@ -31,7 +31,7 @@ Pure-Kotlin container model, component SPI, and multi-phase compilation pipeline
 | --- | --- |
 | `BuilderPass` | Functional interface for inspecting or rewriting a `ContainerBuilder` during compilation. |
 | `PassPhase` | Ordered compilation phases: `BeforeOptimization`, `Optimization`, `BeforeRemoving`, `Removing`, and `AfterRemoving`. |
-| `ContainerCompiler`, `CompiledContainer`, `ResolvedEntryPoint` | Executes components in topological order, applies configurations, runs passes by phase and priority, and emits the compiled container. |
+| `ContainerCompiler`, `CompiledContainer`, `CompiledContext`, `ResolvedEntryPoint` | Executes components in topological order, applies configurations, compiles scoped child contexts, runs passes by phase and priority, and emits the compiled container. |
 
 ## Installation
 
@@ -61,6 +61,10 @@ class AppConfiguration : Configuration<App> {
         service<AppConfig> {
             argument("port", env("PORT", 8080))
         }
+        context<RequestScope, HttpRequest>("request") {
+            service<RequestHandler>()
+            entryPoint<RequestHandler>("handler")
+        }
     }
 }
 ```
@@ -72,7 +76,7 @@ Inside `Component.register()` and `Configuration.configure()`, `ContainerBuilder
 ### Registering Services
 
 - **`service`** wires a class through its public primary constructor. Services are shared and eager by default.
-- **`factory`** calls a top-level function or an `object` factory method instead of a public constructor, which lets modules keep implementations `internal`.
+- **`factory`** calls a top-level function, an `object` method or a `companion object` factory method instead of a public constructor, which lets modules keep implementations `internal` or hide construction behind a companion factory.
 - **`external`** declares a dependency passed into the generated container constructor at runtime, such as runtime configuration or database connections.
 
 ```kotlin
@@ -148,6 +152,21 @@ configure<MessengerComponent, MessengerOptions> {
 }
 ```
 
+### Scoped Contexts
+
+`context` declares or extends an isolated child container scoped to a `KmpKtContext` marker. Define the handle and runtime input type in the root `Configuration`, then contribute services and module views (`view<V>()`) from any `Component`:
+
+```kotlin
+context<Store, StoreScope, StoreConnection> {
+    service<StoreDatabase>()
+}
+
+context<Store> {
+    service<LoyaltyService>()
+    view<LoyaltyView>()
+}
+```
+
 ## Extending
 
 ### Feature component
@@ -176,6 +195,34 @@ import io.kmpkt.di.compiler.ContainerBuilder
 class AppConfiguration : Configuration<App> {
     override fun ContainerBuilder.configure() {
         discover("com.example.app")
+    }
+}
+```
+
+### Extending a scoped context across modules
+
+Declare a `KmpKtContext` marker and its lifecycle in the application `Configuration`, then extend it from feature components with `context<M> { ... }` and `view<V>()`:
+
+```kotlin
+import io.kmpkt.di.KmpKtContext
+import io.kmpkt.di.compiler.Configuration
+import io.kmpkt.di.compiler.ContainerBuilder
+import io.kmpkt.di.compiler.SimpleComponent
+
+object Store : KmpKtContext
+
+class AppConfiguration : Configuration<App> {
+    override fun ContainerBuilder.configure() {
+        context<Store, StoreScope, StoreConnection> {}
+    }
+}
+
+class LoyaltyComponent : SimpleComponent {
+    override fun ContainerBuilder.register() {
+        context<Store> {
+            service<LoyaltyService>()
+            view<LoyaltyView>()
+        }
     }
 }
 ```

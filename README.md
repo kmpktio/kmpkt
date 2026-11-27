@@ -130,6 +130,8 @@ fun main(args: Array<String>) = KmpKt.run<TodoApp>(args)
   `audit`, `telemetry`, and `features` modules via compile-time decorators and component options
 - [`examples/messenger`](examples/messenger) — Multi-bus routing, custom middleware stamps,
   priority event handlers, async worker retries, and dead-lettering
+- [`examples/scoped-contexts`](examples/scoped-contexts) — Multi-module retail backend with
+  runtime-scoped child containers and module views
 
 ## Modules
 

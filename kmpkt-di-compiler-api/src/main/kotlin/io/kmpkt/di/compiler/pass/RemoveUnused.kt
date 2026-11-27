@@ -18,6 +18,7 @@ internal class RemoveUnused : BuilderPass {
         val pending =
             ArrayDeque(
                 container.entryPoints.mapNotNull { container.aliases[it.key] } +
+                    container.protectedIds +
                     container.definitions.values
                         .filter { it.tags.any { tag -> tag is ApplicationRunnerTag } }
                         .map { it.id },

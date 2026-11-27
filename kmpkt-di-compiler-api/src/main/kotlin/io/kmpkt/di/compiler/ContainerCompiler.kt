@@ -35,10 +35,22 @@ public class ContainerCompiler(
         ordered.forEach { with(it) { container.prepare() } }
         configurations.forEach { with(it) { container.configure() } }
         load(ordered, container)
+        registerContexts(container)
 
         // Stable, so passes of one phase and priority keep the order they were added in.
         val passes = container.passes.sortedWith(compareBy<RegisteredPass> { it.phase.order }.thenByDescending { it.priority })
-        for (registered in passes) {
+        for (registered in passes.filter { it.phase.order < PassPhase.Removing.order }) {
+            if (container.diagnostics.hasErrors) return null
+            registered.pass.process(container)
+        }
+        if (container.diagnostics.hasErrors) return null
+
+        val compiledContexts =
+            container.contexts.values.map { ctx ->
+                compileContext(ctx, container) ?: return null
+            }
+
+        for (registered in passes.filter { it.phase.order >= PassPhase.Removing.order }) {
             if (container.diagnostics.hasErrors) return null
             registered.pass.process(container)
         }
@@ -56,6 +68,145 @@ public class ContainerCompiler(
                     .sortedByDescending { definition ->
                         definition.tags.filterIsInstance<ApplicationRunnerTag>().maxOf { it.priority }
                     }.map { it.id },
+            contexts = compiledContexts,
+        )
+    }
+
+    private fun registerContexts(container: ContainerBuilder) {
+        container.contexts.values.forEach { ctx ->
+            val contextType = ctx.contextType
+            val inputType = ctx.inputType
+            val handleType = ctx.handleType
+            if (contextType == null || inputType == null || handleType == null) {
+                container.diagnostics.error(
+                    "Context \"${ctx.name}\" was extended without being declared via context<M, H, I> { ... }.",
+                )
+                return@forEach
+            }
+            val scopeType =
+                TypeRef(
+                    "io.kmpkt.di.ContextScope",
+                    listOf(
+                        TypeArgument.Of(inputType),
+                        TypeArgument.Of(handleType),
+                    ),
+                )
+            val scopeId = ServiceId("context.${ctx.name}")
+            val arguments =
+                if (contextType != inputType) {
+                    val factoryType =
+                        TypeRef(
+                            "io.kmpkt.di.ContextFactory",
+                            listOf(TypeArgument.Of(contextType), TypeArgument.Of(inputType)),
+                        )
+                    val factoryKey = ServiceKey(factoryType)
+                    if (factoryKey !in container.aliases) {
+                        val candidate =
+                            container.definitions.values.singleOrNull { def ->
+                                container.types.isAssignable(def.type, factoryType)
+                            }
+                        if (candidate != null) {
+                            container.alias(factoryKey, candidate.id)
+                        }
+                    }
+                    mapOf("factory" to Argument.Service(ServiceReference.ByKey(factoryKey)))
+                } else {
+                    emptyMap()
+                }
+            container.service(
+                ServiceDefinition(
+                    id = scopeId,
+                    type = scopeType,
+                    instantiation = Instantiation.ContextScope(ctx.name),
+                    arguments = arguments,
+                ),
+            )
+            container.alias(ServiceKey(scopeType), scopeId)
+            container.alias(ServiceKey(scopeType, ctx.name), scopeId)
+        }
+    }
+
+    private fun compileContext(
+        ctx: ContextDefinition,
+        parent: ContainerBuilder,
+    ): CompiledContext? {
+        val contextType = ctx.contextType ?: return null
+        val inputType = ctx.inputType ?: return null
+        val handleType = ctx.handleType ?: return null
+        val child = ctx.builder
+        child.parent = parent
+
+        val exposedInterfaces =
+            (listOf(handleType) + child.views.distinct())
+                .filterNot { it.qualifiedName == "io.kmpkt.di.ContextHandle" }
+        exposedInterfaces.forEach { iface ->
+            parent.types.properties(iface).forEach { prop ->
+                if (prop.name == "context") return@forEach
+                val existing = child.entryPoints.firstOrNull { it.name == prop.name }
+                if (existing == null) {
+                    child.entryPoint(prop.name, ServiceKey(prop.type))
+                } else if (existing.key.type != prop.type) {
+                    child.diagnostics.error(
+                        "Context \"${ctx.name}\" interface $iface property '${prop.name}: ${prop.type}' " +
+                            "conflicts with existing entry point of type ${existing.key.type}.",
+                    )
+                }
+            }
+        }
+        if (child.diagnostics.hasErrors) return null
+
+        parent.autoconfigurations.forEach { rule ->
+            child.autoconfigure(rule.type) {
+                rule.tags.forEach(::tag)
+            }
+        }
+        val passes =
+            (child.passes + builtIn)
+                .sortedWith(compareBy<RegisteredPass> { it.phase.order }.thenByDescending { it.priority })
+        for (registered in passes) {
+            if (child.diagnostics.hasErrors) return null
+            registered.pass.process(child)
+        }
+        if (child.diagnostics.hasErrors) return null
+
+        child.definitions.values
+            .mapNotNull { (it.instantiation as? Instantiation.Parent)?.id }
+            .forEach { parent.protectedIds += it }
+
+        val scopeDef = parent.definitions[ServiceId("context.${ctx.name}")]
+        val factoryId =
+            (scopeDef?.arguments?.get("factory") as? Argument.Service)
+                ?.reference
+                ?.let { (it as? ServiceReference.ById)?.id }
+        if (factoryId != null) {
+            parent.protectedIds += factoryId
+        }
+
+        return CompiledContext(
+            name = ctx.name,
+            contextType = contextType,
+            inputType = inputType,
+            handleType = handleType,
+            views = child.views.distinct(),
+            factoryId = factoryId,
+            compiled =
+                CompiledContainer(
+                    definitions = child.definitions.values.toList(),
+                    entryPoints =
+                        child.entryPoints.map { entryPoint ->
+                            ResolvedEntryPoint(
+                                entryPoint.name,
+                                entryPoint.key.type,
+                                child.aliases.getValue(entryPoint.key),
+                            )
+                        },
+                    runners =
+                        child.definitions.values
+                            .filter { it.tags.any { tag -> tag is ApplicationRunnerTag } }
+                            .sortedByDescending { definition ->
+                                definition.tags.filterIsInstance<ApplicationRunnerTag>().maxOf { it.priority }
+                            }.map { it.id },
+                ),
         )
     }
 
@@ -145,9 +296,20 @@ public data class CompiledContainer(
     val definitions: List<ServiceDefinition>,
     val entryPoints: List<ResolvedEntryPoint>,
     val runners: List<ServiceId> = emptyList(),
+    val contexts: List<CompiledContext> = emptyList(),
 ) {
     public fun definition(id: ServiceId): ServiceDefinition = definitions.first { it.id == id }
 }
+
+public data class CompiledContext(
+    val name: String,
+    val contextType: TypeRef,
+    val inputType: TypeRef,
+    val handleType: TypeRef,
+    val factoryId: ServiceId?,
+    val compiled: CompiledContainer,
+    val views: List<TypeRef> = emptyList(),
+)
 
 public data class ResolvedEntryPoint(
     val name: String,

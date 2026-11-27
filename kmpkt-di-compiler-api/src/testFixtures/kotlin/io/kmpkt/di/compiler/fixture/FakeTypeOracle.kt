@@ -22,6 +22,7 @@ public class FakeTypeOracle : TypeOracle {
     private val shapes = LinkedHashMap<String, Shape>()
     private val traits = mutableMapOf<String, Set<ClassTrait>>()
     private val functions = mutableMapOf<String, List<Parameter>>()
+    private val propertiesMap = mutableMapOf<String, List<Parameter>>()
 
     /** [parameters] of `null` declares a type the generated container could not construct. */
     public fun declare(
@@ -53,6 +54,19 @@ public class FakeTypeOracle : TypeOracle {
     ) {
         functions[qualifiedName] = parameters.toList()
     }
+
+    public fun declareProperties(
+        type: TypeRef,
+        properties: List<Parameter>,
+    ) {
+        propertiesMap[type.qualifiedName] = properties
+    }
+
+    public inline fun <reified T> declareProperties(vararg properties: Parameter) {
+        declareProperties(typeRef<T>(), properties.toList())
+    }
+
+    override fun properties(type: TypeRef): List<Parameter> = propertiesMap[type.qualifiedName].orEmpty()
 
     override fun isAssignable(
         from: TypeRef,
@@ -89,7 +103,7 @@ public class FakeTypeOracle : TypeOracle {
             is Instantiation.Function -> functions["${instantiation.packageName}.${instantiation.name}"]
             is Instantiation.ObjectFunction -> functions["${instantiation.owner.qualifiedName}.${instantiation.name}"]
             is Instantiation.StaticFactory -> functions["${instantiation.owner.qualifiedName}.${instantiation.name}"]
-            is Instantiation.External -> null
+            is Instantiation.External, is Instantiation.Parent, is Instantiation.ContextScope -> null
         }
 }
 
