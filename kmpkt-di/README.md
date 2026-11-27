@@ -7,7 +7,11 @@ Runtime contracts for KmpKt compile-time dependency injection. Defines the appli
 | Symbol | Description |
 | --- | --- |
 | `KmpKtApplication` | Marker interface for an application entry point wired by a `Configuration`, including `KmpKtApplication.Default` for applications without a custom marker. |
+| `KmpKtContext` | Marker interface for a typed scoped child container declared via `context<M, H, I> { ... }` and extended across modules via `context<M> { ... }`. |
 | `ApplicationRunner` | Startup runner interface automatically tagged with `ApplicationRunnerTag`, retained by dead-code elimination, and invoked in priority order by `KmpKt.run`. |
+| `ContextHandle` | `AutoCloseable` handle representing an opened scoped child container, exposing its domain `context` and projecting onto module views via `view<V>()`. |
+| `ContextScope` | Root-injected factory for opening (`open(input)`) or running (`invoke(input) { ... }`) scoped child containers. |
+| `ContextFactory` | Root-registered factory contract for creating a domain context `C` from runtime input `I` and tearing it down in `destroy(context)`. |
 
 ## Installation
 
@@ -48,6 +52,38 @@ import io.kmpkt.di.KmpKt
 
 fun main(args: Array<String>) = KmpKt.run<TodoApp>(args)
 ```
+
+### Scoped Contexts
+
+Use `ContextScope` in root services to open isolated child containers with runtime input (`invoke` auto-closes at the end of the block; `open` returns an `AutoCloseable` handle for long-lived or event-driven lifecycles). Any `AutoCloseable` services inside the child container are closed in reverse order before `ContextFactory.destroy(context)` runs:
+
+```kotlin
+// Short-lived scope (opens, runs, and closes automatically)
+requestScope(HttpRequest("/orders")) {
+    handler.handle()
+}
+
+// Long-lived scope (kept open until a disconnect/close event arrives)
+val handle = storeScope.open(StoreConnection(storeId, erpEndpoint))
+// ... later when the context ends:
+handle.close()
+```
+
+#### Modular Contexts (`KmpKtContext` & `view<V>()`)
+
+In a modular application, a `core` module can manage the context lifecycle using a `KmpKtContext` marker without knowing about every feature module. Feature modules contribute their own scoped services via `context<Store> { ... }`, declare a small view interface (`LoyaltyView`) containing only what they need, and project the active handle with `view<V>()`:
+
+```kotlin
+object Store : KmpKtContext
+
+interface LoyaltyView {
+    val loyalty: LoyaltyService
+}
+
+val loyalty = registry.get(storeId).view<LoyaltyView>().loyalty
+```
+
+See [examples/scoped-contexts](../examples/scoped-contexts/README.md) for a complete multi-module example.
 
 ## Extending
 

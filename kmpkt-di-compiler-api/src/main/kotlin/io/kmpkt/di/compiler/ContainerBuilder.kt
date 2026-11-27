@@ -50,6 +50,28 @@ public class ContainerBuilder private constructor(
     public val aliases: Map<ServiceKey, ServiceId> get() = mutableAliases
 
     public val entryPoints: List<EntryPoint> get() = pipeline.entryPoints
+    public val contexts: Map<String, ContextDefinition> get() = pipeline.contexts
+    internal var parent: ContainerBuilder? = null
+    internal val protectedIds: MutableSet<ServiceId> get() = pipeline.protectedIds
+
+    internal fun resolveParent(key: ServiceKey): ServiceId? {
+        val parentBuilder = parent ?: return null
+        val parentTarget = parentBuilder.aliases[key] ?: return null
+        val parentDef = parentBuilder.definitions[parentTarget] ?: return null
+        val localId = ServiceId("parent:${parentTarget.value}")
+        if (localId !in mutableDefinitions) {
+            mutableDefinitions[localId] =
+                ServiceDefinition(
+                    id = localId,
+                    type = parentDef.type,
+                    instantiation = Instantiation.Parent(parentTarget),
+                    scope = Scope.Shared,
+                    lazy = true,
+                )
+        }
+        alias(key, localId)
+        return localId
+    }
 
     /** Adds [definition], replacing one of the same id, and binds it to its own type. */
     public fun service(definition: ServiceDefinition): DefinitionConfigurator {
@@ -178,7 +200,7 @@ public class ContainerBuilder private constructor(
      * Registers classes of the package [packageName] as services, one package at a time:
      *
      * ```kotlin
-     * container.discover("dev.michaelpetri.todo.application") {
+     * container.discover("com.example.todo.application") {
      *     services<CommandHandler<*>>()
      *     services<EventHandler<*>>()
      * }
@@ -345,6 +367,174 @@ public class ContainerBuilder private constructor(
         pipeline.entryPoints += EntryPoint(name, key)
     }
 
+    /** Declares a service of type [T] exposed by the generated container or context handle as [name]. */
+    public inline fun <reified T : Any> entryPoint(
+        name: String,
+        qualifier: String? = null,
+    ): Unit = entryPoint(name, ServiceKey(typeRef<T>(), qualifier))
+
+    /**
+     * Exposes a module-specific view interface [viewType] on this scoped child container so callers can
+     * project a [io.kmpkt.di.ContextHandle] via `handle.view<V>()`.
+     */
+    public fun view(viewType: TypeRef) {
+        if (parent == null) {
+            diagnostics.error("view($viewType) can only be called inside a context { ... } block.")
+            return
+        }
+        pipeline.views += viewType
+    }
+
+    /** Exposes a module-specific view interface [V] on this scoped child container. */
+    public inline fun <reified V : Any> view(): Unit = view(typeRef<V>())
+
+    /**
+     * Declares a scoped child container for domain context [contextType], opened with runtime [inputType]
+     * and exposed to callers via [handleType].
+     */
+    public fun context(
+        name: String,
+        contextType: TypeRef,
+        inputType: TypeRef = contextType,
+        handleType: TypeRef = TypeRef("io.kmpkt.di.ContextHandle", listOf(TypeArgument.Of(contextType))),
+        configure: ContainerBuilder.() -> Unit = {},
+    ) {
+        val existing = pipeline.contexts[name]
+        val definition =
+            if (existing == null) {
+                val child = ContainerBuilder(types, diagnostics).also { it.parent = this }
+                child.external(contextType, name = "context")
+                child.entryPoint("context", ServiceKey(contextType))
+                ContextDefinition(name, contextType, inputType, handleType, child).also {
+                    pipeline.contexts[name] = it
+                }
+            } else {
+                if (existing.contextType == null) {
+                    existing.builder.external(contextType, name = "context")
+                    existing.builder.entryPoint("context", ServiceKey(contextType))
+                } else if (
+                    existing.contextType != contextType ||
+                    existing.inputType != inputType ||
+                    existing.handleType != handleType
+                ) {
+                    diagnostics.error(
+                        "Context \"$name\" is already declared as " +
+                            "(${existing.contextType}, ${existing.inputType}, ${existing.handleType}) " +
+                            "and cannot be redeclared as ($contextType, $inputType, $handleType).",
+                    )
+                    return
+                }
+                existing
+                    .copy(
+                        contextType = existing.contextType ?: contextType,
+                        inputType = existing.inputType ?: inputType,
+                        handleType = existing.handleType ?: handleType,
+                    ).also { pipeline.contexts[name] = it }
+            }
+        definition.builder.configure()
+    }
+
+    /**
+     * Extends an existing scoped child container named [name] from another module or configuration block.
+     */
+    public fun context(
+        name: String,
+        configure: ContainerBuilder.() -> Unit,
+    ) {
+        val definition =
+            pipeline.contexts.getOrPut(name) {
+                val child = ContainerBuilder(types, diagnostics).also { it.parent = this }
+                ContextDefinition(name = name, contextType = null, inputType = null, handleType = null, builder = child)
+            }
+        definition.builder.configure()
+    }
+
+    /**
+     * Declares a scoped child container exposed via [H] (`ContextHandle<C>`) and opened with runtime input [I].
+     */
+    @JvmName("declareNamedContext")
+    public inline fun <reified H : io.kmpkt.di.ContextHandle<*>, reified I : Any> context(
+        name: String,
+        noinline configure: ContainerBuilder.() -> Unit = {},
+    ) {
+        val handleType = typeRef<H>()
+        val resolvedContext = resolveContextType(name, handleType) ?: return
+        context(name, resolvedContext, typeRef<I>(), handleType, configure)
+    }
+
+    /**
+     * Declares a scoped child container keyed by marker [M], exposed via [H] (`ContextHandle<C>`), and
+     * opened with runtime input [I].
+     */
+    @JvmName("declareContextWithInput")
+    public inline fun <
+        reified M : io.kmpkt.di.KmpKtContext,
+        reified H : io.kmpkt.di.ContextHandle<*>,
+        reified I : Any,
+    > context(
+        noinline configure: ContainerBuilder.() -> Unit = {},
+    ) {
+        val name = typeRef<M>().qualifiedName
+        val handleType = typeRef<H>()
+        val resolvedContext = resolveContextType(name, handleType) ?: return
+        context(name, resolvedContext, typeRef<I>(), handleType, configure)
+    }
+
+    /**
+     * Declares a scoped child container keyed by marker [M].
+     *
+     * When [T] implements [io.kmpkt.di.ContextHandle], it is used as the handle interface `H` and its
+     * type argument `C` becomes both context and input type. Otherwise [T] itself is the context and
+     * input type, exposed via `ContextHandle<T>`.
+     */
+    @JvmName("declareContext")
+    public inline fun <
+        reified M : io.kmpkt.di.KmpKtContext,
+        reified T : Any,
+    > context(
+        noinline configure: ContainerBuilder.() -> Unit = {},
+    ) {
+        val name = typeRef<M>().qualifiedName
+        val type = typeRef<T>()
+        val contextHandle = TypeRef("io.kmpkt.di.ContextHandle")
+        if (types.isAssignable(type, contextHandle)) {
+            val resolvedContext = resolveContextType(name, type) ?: return
+            context(name, resolvedContext, resolvedContext, type, configure)
+        } else {
+            val handleType = TypeRef("io.kmpkt.di.ContextHandle", listOf(TypeArgument.Of(type)))
+            context(name, type, type, handleType, configure)
+        }
+    }
+
+    /**
+     * Extends the scoped child container keyed by marker [M] from another module or configuration block.
+     */
+    @JvmName("extendContext")
+    public inline fun <reified M : io.kmpkt.di.KmpKtContext> context(
+        noinline configure: ContainerBuilder.() -> Unit,
+    ) {
+        context(typeRef<M>().qualifiedName, configure)
+    }
+
+    @PublishedApi
+    internal fun resolveContextType(
+        name: String,
+        handleType: TypeRef,
+    ): TypeRef? {
+        val contextHandle = TypeRef("io.kmpkt.di.ContextHandle")
+        val resolvedContext =
+            if (handleType.qualifiedName == contextHandle.qualifiedName) {
+                (handleType.arguments.singleOrNull() as? TypeArgument.Of)?.type
+            } else {
+                (types.typeArguments(handleType, contextHandle).singleOrNull() as? TypeArgument.Of)?.type
+            }
+        if (resolvedContext == null) {
+            diagnostics.error("Context \"$name\" handle $handleType must specify a concrete ContextHandle<C> type argument.")
+            return null
+        }
+        return resolvedContext
+    }
+
     internal val passes: List<RegisteredPass> get() = pipeline.passes
     internal val autoconfigurations: List<Autoconfiguration> get() = pipeline.autoconfigurations
 
@@ -370,15 +560,29 @@ public class ContainerBuilder private constructor(
     @Suppress("UNCHECKED_CAST")
     private fun <C : Any> erased(block: C.() -> Unit): (Any) -> Unit = block as (Any) -> Unit
 
+    internal val views: List<TypeRef> get() = pipeline.views
+
     private class Pipeline {
         val passes = mutableListOf<RegisteredPass>()
         val autoconfigurations = mutableListOf<Autoconfiguration>()
         val entryPoints = mutableListOf<EntryPoint>()
+        val views = mutableListOf<TypeRef>()
+        val contexts = linkedMapOf<String, ContextDefinition>()
+        val protectedIds = mutableSetOf<ServiceId>()
         private val options = mutableMapOf<KClass<*>, MutableList<(Any) -> Unit>>()
 
         fun optionsOf(component: KClass<*>): MutableList<(Any) -> Unit> = options.getOrPut(component) { mutableListOf() }
     }
 }
+
+/** A scoped child container definition declared via [ContainerBuilder.context]. */
+public data class ContextDefinition(
+    val name: String,
+    val contextType: TypeRef?,
+    val inputType: TypeRef?,
+    val handleType: TypeRef?,
+    val builder: ContainerBuilder,
+)
 
 /** Keeps a registration block from reaching the builder around it by accident. */
 @DslMarker
@@ -549,8 +753,11 @@ internal fun KFunction<*>.toInstantiation(): Instantiation {
     return when (val owner = reference.owner) {
         is KClass<*> -> {
             val type = TypeRef(requireNotNull(owner.qualifiedName))
-            // A Kotlin object is reached through its INSTANCE; a class without one can only offer statics.
-            val isObject = owner.java.declaredFields.any { it.name == "INSTANCE" }
+            val isCompanion =
+                owner.java.enclosingClass?.declaredFields?.any {
+                    it.name == owner.java.simpleName && it.type == owner.java
+                } == true
+            val isObject = isCompanion || owner.java.declaredFields.any { it.name == "INSTANCE" }
 
             if (isObject) Instantiation.ObjectFunction(type, reference.name) else Instantiation.StaticFactory(type, reference.name)
         }

@@ -6,6 +6,7 @@ import io.kmpkt.di.compiler.ContainerBuilder
 import io.kmpkt.di.compiler.Instantiation
 import io.kmpkt.di.compiler.Scope
 import io.kmpkt.di.compiler.ServiceDefinition
+import io.kmpkt.di.compiler.TypeRef
 import io.kmpkt.di.compiler.Use
 import io.kmpkt.di.compiler.uses
 
@@ -33,8 +34,12 @@ internal class InlineSingleUse : BuilderPass {
             .filter {
                 it.scope == Scope.Shared &&
                     it.instantiation !is Instantiation.External &&
+                    it.instantiation !is Instantiation.Parent &&
+                    it.instantiation !is Instantiation.ContextScope &&
                     it.id !in entryPoints &&
-                    it.id !in runners
+                    it.id !in runners &&
+                    it.id !in container.protectedIds &&
+                    !container.types.isAssignable(it.type, TypeRef("java.lang.AutoCloseable"))
             }.forEach { definition ->
                 val only = consumersOf[definition.id]?.singleOrNull() ?: return@forEach
                 val consumer = only.value.singleOrNull() ?: return@forEach

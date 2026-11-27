@@ -571,6 +571,620 @@ class MultiModuleTest :
                 "acme.shop.Greeter is implemented by 2 discovered services (acme.shop.FriendlyGreeter, acme.shop.GrumpyGreeter) " +
                 "and bound to none of them. Bind the one that is meant."
         }
+
+        test("scoped contexts support ContextFactory with root services, invoke/open/close lifecycle, and parent injection") {
+            val feature =
+                compileModule(
+                    SourceFile.kotlin(
+                        "ScopedFeature.kt",
+                        """
+                        package acme.scoped
+
+                        import io.kmpkt.di.ContextFactory
+                        import io.kmpkt.di.ContextHandle
+
+                        class IdGenerator {
+                            private var next = 0L
+                            val events = mutableListOf<String>()
+
+                            fun nextId(): Long = ++next
+                        }
+
+                        data class MyContext(
+                            val id: Long,
+                            val isLoggingEnabled: Boolean,
+                        )
+
+                        data class MyContextOptions(
+                            val isLoggingEnabled: Boolean,
+                        )
+
+                        class MyContextFactory(
+                            private val ids: IdGenerator,
+                        ) : ContextFactory<MyContext, MyContextOptions> {
+                            override fun create(input: MyContextOptions): MyContext =
+                                MyContext(ids.nextId(), input.isLoggingEnabled).also {
+                                    ids.events += "create:${'$'}{it.id}"
+                                }
+
+                            override fun destroy(context: MyContext) {
+                                ids.events += "destroy:${'$'}{context.id}"
+                            }
+                        }
+
+                        class MyContextService(
+                            val context: MyContext,
+                            private val ids: IdGenerator,
+                        ) : AutoCloseable {
+                            init {
+                                ids.events += "init:${'$'}{context.id}:${'$'}{context.isLoggingEnabled}"
+                            }
+
+                            fun ping(): String = "pong:${'$'}{context.id}".also { ids.events += "ping:${'$'}{context.id}" }
+
+                            override fun close() {
+                                ids.events += "close:${'$'}{context.id}"
+                            }
+                        }
+
+                        interface MySubContext : ContextHandle<MyContext> {
+                            val service: MyContextService
+                        }
+                        """.trimIndent(),
+                    ),
+                    dependsOn = emptyList(),
+                    processorClasspath = emptyList(),
+                )
+            feature.result.exitCode shouldBe KotlinCompilation.ExitCode.OK
+
+            val configuration =
+                project.configuration(
+                    SourceFile.kotlin(
+                        "ScopedConfig.kt",
+                        """
+                        package acme.scoped.di
+
+                        import acme.scoped.IdGenerator
+                        import acme.scoped.MyContext
+                        import acme.scoped.MyContextFactory
+                        import acme.scoped.MyContextOptions
+                        import acme.scoped.MyContextService
+                        import acme.scoped.MySubContext
+                        import io.kmpkt.di.KmpKtApplication
+                        import io.kmpkt.di.compiler.Configuration
+                        import io.kmpkt.di.compiler.ContainerBuilder
+                        import io.kmpkt.di.compiler.TypeRef
+
+                        class ScopedConfig : Configuration<KmpKtApplication.Default> {
+                            override fun ContainerBuilder.configure() {
+                                service<IdGenerator>()
+                                service<MyContextFactory>()
+                                service(TypeRef.parse("acme.scoped.ScopedRunner"))
+                                context<MySubContext, MyContextOptions>("my-sub-context") {
+                                    service<MyContextService>()
+                                    entryPoint<MyContextService>("service")
+                                }
+                            }
+                        }
+                        """.trimIndent(),
+                    ),
+                    feature = feature,
+                )
+
+            val runnerSource =
+                SourceFile.kotlin(
+                    "ScopedRunner.kt",
+                    """
+                    package acme.scoped
+
+                    import io.kmpkt.di.ApplicationRunner
+                    import io.kmpkt.di.ContextScope
+
+                    class ScopedRunner(
+                        private val mySubContext: ContextScope<MyContextOptions, MySubContext>,
+                        private val ids: IdGenerator,
+                    ) : ApplicationRunner {
+                        override fun run(args: Array<String>) {
+                            mySubContext(MyContextOptions(isLoggingEnabled = true)) {
+                                service.ping()
+                            }
+                            val handle = mySubContext.open(MyContextOptions(isLoggingEnabled = false))
+                            handle.service.ping()
+                            handle.close()
+                            ids.events += "done"
+                        }
+                    }
+                    """.trimIndent(),
+                )
+            val appModule =
+                compileModule(
+                    runnerSource,
+                    dependsOn = listOf(feature),
+                    processorClasspath = listOf(feature, configuration),
+                )
+            if (appModule.result.exitCode != KotlinCompilation.ExitCode.OK) {
+                error(appModule.result.messages)
+            }
+
+            val kmpKt = appModule.result.classLoader.loadClass("io.kmpkt.di.KmpKt")
+            val instance = kmpKt.getField("INSTANCE").get(null)
+            kmpKt.getMethod("run", Array<String>::class.java).invoke(instance, emptyArray<String>())
+
+            // Verify lifecycle events via a fresh runner or static? Let's check generated code + run!
+            val generated = appModule.generated("KmpKt.kt")
+            generated shouldContain "MySubContextContainer"
+            generated shouldContain "override fun close()"
+            generated shouldContain "override fun open("
+        }
+
+        test("a root service cannot inject a service registered only inside a context") {
+            val feature =
+                compileModule(
+                    SourceFile.kotlin(
+                        "CaptiveFeature.kt",
+                        """
+                        package acme.captive
+
+                        data class Ctx(val id: Long)
+                        class ScopedOnly(val ctx: Ctx)
+                        """.trimIndent(),
+                    ),
+                    dependsOn = emptyList(),
+                    processorClasspath = emptyList(),
+                )
+            feature.result.exitCode shouldBe KotlinCompilation.ExitCode.OK
+
+            val configuration =
+                project.configuration(
+                    SourceFile.kotlin(
+                        "CaptiveConfig.kt",
+                        """
+                        package acme.captive.di
+
+                        import acme.captive.Ctx
+                        import acme.captive.ScopedOnly
+                        import io.kmpkt.di.ContextHandle
+                        import io.kmpkt.di.KmpKtApplication
+                        import io.kmpkt.di.compiler.Configuration
+                        import io.kmpkt.di.compiler.ContainerBuilder
+                        import io.kmpkt.di.compiler.TypeRef
+
+                        class CaptiveConfig : Configuration<KmpKtApplication.Default> {
+                            override fun ContainerBuilder.configure() {
+                                service(TypeRef.parse("acme.captive.RootConsumer"))
+                                context<ContextHandle<Ctx>, Ctx>("c") {
+                                    service<ScopedOnly>()
+                                    entryPoint<ScopedOnly>("scoped")
+                                }
+                            }
+                        }
+                        """.trimIndent(),
+                    ),
+                    feature = feature,
+                )
+
+            val appModule =
+                compileModule(
+                    SourceFile.kotlin(
+                        "RootConsumer.kt",
+                        """
+                        package acme.captive
+
+                        import io.kmpkt.di.ApplicationRunner
+
+                        class RootConsumer(val scoped: ScopedOnly) : ApplicationRunner {
+                            override fun run(args: Array<String>) = Unit
+                        }
+                        """.trimIndent(),
+                    ),
+                    dependsOn = listOf(feature),
+                    processorClasspath = listOf(feature, configuration),
+                )
+
+            appModule.result.exitCode shouldBe KotlinCompilation.ExitCode.COMPILATION_ERROR
+            appModule.result.messages shouldContain "acme.captive.ScopedOnly"
+        }
+
+        test("marker contexts support multi-configuration extension and module-specific view projections") {
+            val feature =
+                compileModule(
+                    SourceFile.kotlin(
+                        "StoreContextFeature.kt",
+                        """
+                        package acme.modular
+
+                        import io.kmpkt.di.ApplicationRunner
+                        import io.kmpkt.di.ContextFactory
+                        import io.kmpkt.di.ContextHandle
+                        import io.kmpkt.di.ContextScope
+                        import io.kmpkt.di.KmpKtContext
+                        import io.kmpkt.di.view
+
+                        object Store : KmpKtContext
+                        data class StoreInput(val id: String)
+                        data class StoreCtx(val id: String)
+
+                        interface StoreScope : ContextHandle<StoreCtx> {
+                            val db: StoreDb
+                        }
+
+                        class StoreDb(val ctx: StoreCtx)
+
+                        class StoreFactory : ContextFactory<StoreCtx, StoreInput> {
+                            override fun create(input: StoreInput): StoreCtx = StoreCtx(input.id)
+                        }
+
+                        interface LoyaltyView {
+                            val db: StoreDb
+                            val loyalty: LoyaltyService
+                        }
+
+                        class LoyaltyService(val db: StoreDb) {
+                            fun points(): String = "points:" + db.ctx.id
+                        }
+
+                        class Runner(
+                            private val stores: ContextScope<StoreInput, StoreScope>,
+                        ) : ApplicationRunner {
+                            override fun run(args: Array<String>) {
+                                stores(StoreInput("berlin")) {
+                                    println(view<LoyaltyView>().loyalty.points())
+                                }
+                            }
+                        }
+                        """.trimIndent(),
+                    ),
+                    dependsOn = emptyList(),
+                    processorClasspath = emptyList(),
+                )
+            feature.result.exitCode shouldBe KotlinCompilation.ExitCode.OK
+
+            val loyaltyComponent =
+                project.configuration(
+                    SourceFile.kotlin(
+                        "LoyaltyComponent.kt",
+                        """
+                        package acme.modular.loyalty.di
+
+                        import acme.modular.LoyaltyService
+                        import acme.modular.LoyaltyView
+                        import acme.modular.Store
+                        import io.kmpkt.di.compiler.ContainerBuilder
+                        import io.kmpkt.di.compiler.SimpleComponent
+
+                        class LoyaltyComponent : SimpleComponent {
+                            override fun ContainerBuilder.register() {
+                                context<Store> {
+                                    service<LoyaltyService>()
+                                    view<LoyaltyView>()
+                                }
+                            }
+                        }
+                        """.trimIndent(),
+                    ),
+                    feature = feature,
+                )
+
+            val coreConfig =
+                project.configuration(
+                    SourceFile.kotlin(
+                        "CoreConfig.kt",
+                        """
+                        package acme.modular.core.di
+
+                        import acme.modular.Runner
+                        import acme.modular.Store
+                        import acme.modular.StoreDb
+                        import acme.modular.StoreFactory
+                        import acme.modular.StoreInput
+                        import acme.modular.StoreScope
+                        import io.kmpkt.di.KmpKtApplication
+                        import io.kmpkt.di.compiler.Configuration
+                        import io.kmpkt.di.compiler.ContainerBuilder
+
+                        class CoreConfig : Configuration<KmpKtApplication.Default> {
+                            override fun ContainerBuilder.configure() {
+                                service<StoreFactory>()
+                                service<Runner>()
+                                context<Store, StoreScope, StoreInput> {
+                                    service<StoreDb>()
+                                }
+                            }
+                        }
+                        """.trimIndent(),
+                    ),
+                    feature = feature,
+                )
+
+            val appModule =
+                compileModule(
+                    SourceFile.kotlin(
+                        "Main.kt",
+                        """
+                        package acme.modular
+
+                        import io.kmpkt.di.KmpKt
+
+                        fun runApp() {
+                            KmpKt.run()
+                        }
+                        """.trimIndent(),
+                    ),
+                    dependsOn = listOf(feature),
+                    processorClasspath = listOf(feature, loyaltyComponent, coreConfig),
+                )
+            if (appModule.result.exitCode != KotlinCompilation.ExitCode.OK) {
+                error(appModule.result.messages)
+            }
+
+            val out = java.io.ByteArrayOutputStream()
+            val previousOut = System.out
+            System.setOut(java.io.PrintStream(out))
+            try {
+                appModule.result.classLoader
+                    .loadClass("acme.modular.MainKt")
+                    .getMethod("runApp")
+                    .invoke(null)
+            } finally {
+                System.setOut(previousOut)
+            }
+            out.toString().trim().lines() shouldContainExactly listOf("points:berlin")
+        }
+
+        test("extending an undeclared KmpKtContext reports a diagnostic error") {
+            val feature =
+                compileModule(
+                    SourceFile.kotlin(
+                        "MissingContextFeature.kt",
+                        """
+                        package acme.missingctx
+
+                        import io.kmpkt.di.KmpKtContext
+
+                        object Store : KmpKtContext
+                        class LoyaltyService
+                        """.trimIndent(),
+                    ),
+                    dependsOn = emptyList(),
+                    processorClasspath = emptyList(),
+                )
+            feature.result.exitCode shouldBe KotlinCompilation.ExitCode.OK
+
+            val config =
+                project.configuration(
+                    SourceFile.kotlin(
+                        "MissingContextConfig.kt",
+                        """
+                        package acme.missingctx.di
+
+                        import acme.missingctx.LoyaltyService
+                        import acme.missingctx.Store
+                        import io.kmpkt.di.KmpKtApplication
+                        import io.kmpkt.di.compiler.Configuration
+                        import io.kmpkt.di.compiler.ContainerBuilder
+
+                        class MissingContextConfig : Configuration<KmpKtApplication.Default> {
+                            override fun ContainerBuilder.configure() {
+                                context<Store> {
+                                    service<LoyaltyService>()
+                                }
+                            }
+                        }
+                        """.trimIndent(),
+                    ),
+                    feature = feature,
+                )
+
+            val appModule =
+                compileModule(
+                    SourceFile.kotlin(
+                        "Main.kt",
+                        """
+                        package acme.missingctx
+
+                        import io.kmpkt.di.KmpKt
+
+                        fun runApp() {
+                            KmpKt.run()
+                        }
+                        """.trimIndent(),
+                    ),
+                    dependsOn = listOf(feature),
+                    processorClasspath = listOf(feature, config),
+                )
+            appModule.result.exitCode shouldBe KotlinCompilation.ExitCode.COMPILATION_ERROR
+            appModule.result.messages shouldContain "was extended without being declared"
+        }
+
+        val resilientApp by lazy {
+            val feature =
+                compileModule(
+                    SourceFile.kotlin(
+                        "ResilientScope.kt",
+                        """
+                        package acme.resilient
+
+                        import io.kmpkt.di.ApplicationRunner
+                        import io.kmpkt.di.ContextFactory
+                        import io.kmpkt.di.ContextHandle
+                        import io.kmpkt.di.ContextScope
+                        import io.kmpkt.di.KmpKtContext
+
+                        object Events {
+                            val log = mutableListOf<String>()
+                            var failOnClose = false
+                        }
+
+                        object Tenant : KmpKtContext
+
+                        data class TenantCtx(val id: String)
+
+                        class TenantFactory : ContextFactory<TenantCtx, String> {
+                            override fun create(input: String): TenantCtx = TenantCtx(input)
+
+                            override fun destroy(context: TenantCtx) {
+                                Events.log += "destroy:${'$'}{context.id}"
+                            }
+                        }
+
+                        class FirstResource : AutoCloseable {
+                            override fun close() {
+                                Events.log += "close:first"
+                            }
+                        }
+
+                        class FailingResource(val first: FirstResource) : AutoCloseable {
+                            override fun close() {
+                                Events.log += "close:failing"
+                                if (Events.failOnClose) throw IllegalStateException("close-boom")
+                            }
+                        }
+
+                        class PrototypeToken : AutoCloseable {
+                            override fun close() {
+                                Events.log += "close:proto"
+                            }
+                        }
+
+                        interface TenantHandle : ContextHandle<TenantCtx> {
+                            val first: FirstResource
+                            val failing: FailingResource
+                            val token: PrototypeToken
+                        }
+
+                        class Runner(
+                            private val tenants: ContextScope<String, TenantHandle>,
+                        ) : ApplicationRunner {
+                            override fun run(args: Array<String>) {
+                                when (args.firstOrNull()) {
+                                    "suppress-and-destroy" -> {
+                                        val handle = tenants.open("t1")
+                                        handle.failing
+                                        val err = runCatching { handle.close() }.exceptionOrNull()
+                                        Events.log += "threw:${'$'}{err?.message}"
+                                    }
+                                    "idempotent-close" -> {
+                                        val handle = tenants.open("t2")
+                                        handle.first
+                                        handle.close()
+                                        handle.close()
+                                    }
+                                    "prototype-lifecycle" -> {
+                                        val handle = tenants.open("t3")
+                                        val t1 = handle.token
+                                        val t2 = handle.token
+                                        check(t1 !== t2)
+                                        handle.close()
+                                        val postClose = runCatching { handle.token }.exceptionOrNull()
+                                        Events.log += "postClose:${'$'}{postClose is IllegalStateException}"
+                                    }
+                                }
+                            }
+                        }
+                        """.trimIndent(),
+                    ),
+                    dependsOn = emptyList(),
+                    processorClasspath = emptyList(),
+                )
+            feature.result.exitCode shouldBe KotlinCompilation.ExitCode.OK
+
+            val config =
+                project.configuration(
+                    SourceFile.kotlin(
+                        "ResilientConfig.kt",
+                        """
+                        package acme.resilient.di
+
+                        import acme.resilient.FailingResource
+                        import acme.resilient.FirstResource
+                        import acme.resilient.PrototypeToken
+                        import acme.resilient.Runner
+                        import acme.resilient.Tenant
+                        import acme.resilient.TenantFactory
+                        import acme.resilient.TenantHandle
+                        import io.kmpkt.di.KmpKtApplication
+                        import io.kmpkt.di.compiler.Configuration
+                        import io.kmpkt.di.compiler.ContainerBuilder
+
+                        class ResilientConfig : Configuration<KmpKtApplication.Default> {
+                            override fun ContainerBuilder.configure() {
+                                service<TenantFactory>()
+                                service<Runner>()
+                                context<Tenant, TenantHandle, String> {
+                                    service<FirstResource>()
+                                    service<FailingResource>()
+                                    service<PrototypeToken> { prototype() }
+                                }
+                            }
+                        }
+                        """.trimIndent(),
+                    ),
+                    feature = feature,
+                )
+
+            val appModule =
+                compileModule(
+                    SourceFile.kotlin(
+                        "Main.kt",
+                        """
+                        package acme.resilient
+
+                        import io.kmpkt.di.KmpKt
+
+                        fun runScenario(scenario: String): List<String> {
+                            Events.log.clear()
+                            Events.failOnClose = scenario == "suppress-and-destroy"
+                            KmpKt.run(args = arrayOf(scenario))
+                            return Events.log.toList()
+                        }
+                        """.trimIndent(),
+                    ),
+                    dependsOn = listOf(feature),
+                    processorClasspath = listOf(feature, config),
+                )
+            if (appModule.result.exitCode != KotlinCompilation.ExitCode.OK) {
+                error(appModule.result.messages)
+            }
+            appModule
+        }
+
+        @Suppress("UNCHECKED_CAST")
+        fun runResilientScenario(scenario: String): List<String> =
+            resilientApp.result.classLoader
+                .loadClass("acme.resilient.MainKt")
+                .getMethod("runScenario", String::class.java)
+                .invoke(null, scenario) as List<String>
+
+        test("scoped context close closes remaining services and destroys context when a service close throws") {
+            runResilientScenario("suppress-and-destroy") shouldContainExactly
+                listOf(
+                    "close:failing",
+                    "close:first",
+                    "destroy:t1",
+                    "threw:close-boom",
+                )
+        }
+
+        test("scoped context close is idempotent across repeated calls") {
+            runResilientScenario("idempotent-close") shouldContainExactly
+                listOf(
+                    "close:failing",
+                    "close:first",
+                    "destroy:t2",
+                )
+        }
+
+        test("scoped context tracks prototype AutoCloseables and rejects prototype access after close") {
+            runResilientScenario("prototype-lifecycle") shouldContainExactly
+                listOf(
+                    "close:proto",
+                    "close:proto",
+                    "close:failing",
+                    "close:first",
+                    "destroy:t3",
+                    "postClose:true",
+                )
+        }
     })
 
 /** A configuration that knows the application's package and none of its classes - all it can know. */

@@ -14,6 +14,11 @@ import io.kmpkt.di.compiler.transform
  */
 internal class ResolveAliases : BuilderPass {
     override fun process(container: ContainerBuilder) {
+        container.entryPoints.forEach { entryPoint ->
+            if (entryPoint.key !in container.aliases) {
+                container.resolveParent(entryPoint.key)
+            }
+        }
         container.definitions.values.toList().forEach { definition ->
             val resolved = definition.arguments.mapValues { (_, argument) -> argument.transform { resolve(container, definition, it) } }
 
@@ -34,7 +39,7 @@ internal class ResolveAliases : BuilderPass {
                 is Argument.Deferred -> argument.reference
                 else -> return argument
             } as? ServiceReference.ByKey ?: return argument
-        val target = container.aliases[reference.key]
+        val target = container.aliases[reference.key] ?: container.resolveParent(reference.key)
 
         return when {
             target == null && reference.onMissing == OnMissing.Null -> Argument.Literal(ConstValue.Null)

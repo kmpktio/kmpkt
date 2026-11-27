@@ -25,3 +25,5 @@ compile-time dependency injection.
   `telemetry`, and `features` modules composed with compile-time decorators.
 - [Messenger Tooling Example](../examples/messenger/README.md) — Multi-bus routing, custom
   middleware stamps, priority handlers, async worker retries, and dead-lettering.
+- [Scoped Contexts Example](../examples/scoped-contexts/README.md) — Compile-time scoped child
+  containers with `ContextFactory`, `ContextScope`, `invoke`, and `open`/`close` lifecycles.

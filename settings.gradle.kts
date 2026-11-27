@@ -34,6 +34,10 @@ include("examples:modulith:telemetry")
 include("examples:modulith:features")
 include("examples:modulith:runtime")
 include("examples:modulith:app")
+include("examples:scoped-contexts:core")
+include("examples:scoped-contexts:catalog")
+include("examples:scoped-contexts:orders")
+include("examples:scoped-contexts:app")
 
 dependencyResolutionManagement {
     repositories {

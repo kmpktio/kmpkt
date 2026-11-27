@@ -37,7 +37,7 @@ internal class ResolveDecorators : BuilderPass {
     ) {
         val decorator = container.definitions.getValue(id)
         val decoration = decorator.decorates ?: return
-        val inner = container.find(decoration.target)
+        val inner = container.find(decoration.target) ?: container.resolveParent(decoration.target)?.let { container.definitions[it] }
 
         if (inner == null) {
             container.diagnostics.error("${decorator.describe()} decorates ${decoration.target}, but no service is bound to that.")

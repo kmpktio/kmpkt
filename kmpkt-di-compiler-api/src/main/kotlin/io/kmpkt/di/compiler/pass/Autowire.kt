@@ -22,8 +22,11 @@ import io.kmpkt.di.compiler.TypeRef
 internal class Autowire : BuilderPass {
     override fun process(container: ContainerBuilder) {
         container.definitions.values
-            .filter { it.instantiation !is Instantiation.External }
-            .forEach { definition ->
+            .filter {
+                it.instantiation !is Instantiation.External &&
+                    it.instantiation !is Instantiation.Parent &&
+                    it.instantiation !is Instantiation.ContextScope
+            }.forEach { definition ->
                 val parameters = container.types.parameters(definition.type, definition.instantiation)
 
                 if (parameters == null) {
@@ -100,7 +103,10 @@ internal class Autowire : BuilderPass {
         container: ContainerBuilder,
         type: TypeRef,
         name: String,
-    ): ServiceKey? = listOf(ServiceKey(type, name), ServiceKey(type)).firstOrNull { it in container.aliases }
+    ): ServiceKey? =
+        listOf(ServiceKey(type, name), ServiceKey(type)).firstOrNull { key ->
+            key in container.aliases || container.parent?.aliases?.containsKey(key) == true
+        }
 
     private fun deferredKind(type: TypeRef): Argument.Deferred.Kind? =
         when {
@@ -147,5 +153,7 @@ internal class Autowire : BuilderPass {
             is Instantiation.StaticFactory ->
                 "there is no single public static method ${instantiation.name} on ${instantiation.owner} returning ${definition.type}."
             is Instantiation.External -> "it is external."
+            is Instantiation.Parent -> "it comes from the parent container."
+            is Instantiation.ContextScope -> "it is a generated context scope."
         }
 }

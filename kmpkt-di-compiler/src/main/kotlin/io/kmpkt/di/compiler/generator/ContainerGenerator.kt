@@ -15,6 +15,7 @@ import com.squareup.kotlinpoet.TypeSpec
 import com.squareup.kotlinpoet.joinToCode
 import io.kmpkt.di.compiler.Argument
 import io.kmpkt.di.compiler.CompiledContainer
+import io.kmpkt.di.compiler.CompiledContext
 import io.kmpkt.di.compiler.ConstValue
 import io.kmpkt.di.compiler.Instantiation
 import io.kmpkt.di.compiler.Scope
@@ -58,7 +59,7 @@ internal class ContainerGenerator(
             val containerName = kmpKt.nestedClass(containerSimple)
             containersByApp[appClass] = containerName
 
-            val writer = Writer(compiled)
+            val writer = Writer(compiled, containerName)
             containerTypes +=
                 writer
                     .typeBuilder(containerName, KModifier.PRIVATE)
@@ -142,18 +143,33 @@ internal class ContainerGenerator(
 
     private inner class Writer(
         private val compiled: CompiledContainer,
+        private val containerClassName: ClassName,
+        private val parentWriter: Writer? = null,
+        private val contextInfo: CompiledContext? = null,
     ) {
         private val definitions = compiled.definitions.associateBy { it.id }
         private val names = NameAllocator()
         private val members: Map<ServiceId, String>
+        private val contextClassNames: Map<String, ClassName>
 
         init {
             // Entry points first: their names are the contract's and cannot move.
             compiled.entryPoints.forEach { names.newName(it.name) }
             members =
                 compiled.definitions
-                    .filterNot { it.inlined }
+                    .filterNot { it.inlined || it.instantiation is Instantiation.Parent }
                     .associate { it.id to names.newName(suggestion(it)) }
+            contextClassNames =
+                compiled.contexts.associate { ctx ->
+                    val raw =
+                        ctx.name
+                            .substringAfterLast('.')
+                            .split(Regex("[^A-Za-z0-9]+"))
+                            .filter { it.isNotEmpty() }
+                            .joinToString("") { part -> part.replaceFirstChar { it.uppercase() } }
+                            .ifEmpty { "Context" } + "Container"
+                    ctx.name to containerClassName.nestedClass(names.newName(raw))
+                }
         }
 
         fun typeBuilder(
@@ -169,6 +185,22 @@ internal class ContainerGenerator(
             val constructor = FunSpec.constructorBuilder()
             val type = TypeSpec.classBuilder(className).addModifiers(visibility)
 
+            if (parentWriter != null) {
+                constructor.addParameter("parent", parentWriter.containerClassName)
+                type.addProperty(
+                    PropertySpec
+                        .builder("parent", parentWriter.containerClassName, KModifier.PRIVATE)
+                        .initializer("parent")
+                        .build(),
+                )
+            }
+            if (contextInfo != null) {
+                type.addSuperinterface(typeName(contextInfo.handleType))
+                contextInfo.views.forEach { view ->
+                    type.addSuperinterface(typeName(view))
+                }
+            }
+
             externals.forEach { external ->
                 val parameter = (external.instantiation as Instantiation.External).parameterName
                 constructor.addParameter(parameter, typeName(external.type))
@@ -179,8 +211,28 @@ internal class ContainerGenerator(
                         .build(),
                 )
             }
-            if (externals.isNotEmpty()) {
+            if (externals.isNotEmpty() || parentWriter != null) {
                 type.primaryConstructor(constructor.build())
+            }
+
+            if (contextInfo != null) {
+                val autoCloseable = ClassName("java.lang", "AutoCloseable")
+                val mutableListOfAutoCloseable =
+                    ClassName("kotlin.collections", "MutableList").parameterizedBy(autoCloseable)
+                type.addProperty(
+                    PropertySpec
+                        .builder("closeables", mutableListOfAutoCloseable, KModifier.PRIVATE)
+                        .initializer("mutableListOf()")
+                        .build(),
+                )
+                type.addProperty(
+                    PropertySpec
+                        .builder("closed", ClassName("kotlin", "Boolean"), KModifier.PRIVATE)
+                        .addAnnotation(ClassName("kotlin.jvm", "Volatile"))
+                        .mutable(true)
+                        .initializer("false")
+                        .build(),
+                )
             }
 
             compiled.entryPoints.forEach { entryPoint ->
@@ -193,7 +245,7 @@ internal class ContainerGenerator(
             }
 
             compiled.definitions
-                .filterNot { it.inlined || it.instantiation is Instantiation.External }
+                .filterNot { it.inlined || it.instantiation is Instantiation.External || it.instantiation is Instantiation.Parent }
                 .forEach { definition ->
                     when (definition.scope) {
                         Scope.Shared -> type.addProperty(shared(definition))
@@ -203,7 +255,11 @@ internal class ContainerGenerator(
 
             val eager =
                 compiled.definitions.filter {
-                    !it.inlined && it.instantiation !is Instantiation.External && it.scope == Scope.Shared && !it.lazy
+                    !it.inlined &&
+                        it.instantiation !is Instantiation.External &&
+                        it.instantiation !is Instantiation.Parent &&
+                        it.scope == Scope.Shared &&
+                        !it.lazy
                 }
             if (eager.isNotEmpty()) {
                 type.addInitializerBlock(
@@ -211,24 +267,99 @@ internal class ContainerGenerator(
                 )
             }
 
+            if (contextInfo != null) {
+                type.addFunction(trackFunction(contextInfo))
+                type.addFunction(closeFunction(contextInfo))
+            }
+
+            compiled.contexts.forEach { ctx ->
+                val childName = contextClassNames.getValue(ctx.name)
+                val childWriter = Writer(ctx.compiled, childName, parentWriter = this, contextInfo = ctx)
+                type.addType(childWriter.typeBuilder(childName, KModifier.PRIVATE).build())
+            }
+
             return type
         }
 
-        private fun shared(definition: ServiceDefinition): PropertySpec =
-            PropertySpec
+        private fun trackFunction(ctx: CompiledContext): FunSpec {
+            val typeVar = com.squareup.kotlinpoet.TypeVariableName("T")
+            return FunSpec
+                .builder("track")
+                .addModifiers(KModifier.PRIVATE)
+                .addTypeVariable(typeVar)
+                .addParameter("instance", typeVar)
+                .returns(typeVar)
+                .beginControlFlow("if (instance is AutoCloseable)")
+                .beginControlFlow("synchronized(closeables)")
+                .beginControlFlow("if (closed)")
+                .addStatement("instance.close()")
+                .addStatement("check(false) { %S }", "Context \"${ctx.name}\" is closed")
+                .endControlFlow()
+                .addStatement("closeables += instance")
+                .endControlFlow()
+                .endControlFlow()
+                .addStatement("return instance")
+                .build()
+        }
+
+        private fun closeFunction(ctx: CompiledContext): FunSpec =
+            FunSpec
+                .builder("close")
+                .addModifiers(KModifier.OVERRIDE)
+                .addStatement(
+                    "val toClose = synchronized(closeables) {\n⇥if (closed) return\nclosed = true\ncloseables.reversed().also { closeables.clear() }\n⇤}",
+                ).addStatement("var failure: Throwable? = null")
+                .beginControlFlow("for (closeable in toClose)")
+                .beginControlFlow("try")
+                .addStatement("closeable.close()")
+                .nextControlFlow("catch (e: Throwable)")
+                .addStatement("if (failure == null) failure = e else failure.addSuppressed(e)")
+                .endControlFlow()
+                .endControlFlow()
+                .apply {
+                    val factoryId = ctx.factoryId
+                    if (factoryId != null && parentWriter != null) {
+                        beginControlFlow("try")
+                        addStatement("parent.%L.destroy(context)", parentWriter.reference(factoryId))
+                        nextControlFlow("catch (e: Throwable)")
+                        addStatement("if (failure == null) failure = e else failure.addSuppressed(e)")
+                        endControlFlow()
+                    }
+                }.addStatement("if (failure != null) throw failure")
+                .build()
+
+        private fun shared(definition: ServiceDefinition): PropertySpec {
+            val body =
+                if (contextInfo != null) {
+                    CodeBlock.of(
+                        "lazy {\n⇤check(!closed) { %S }\ntrack(%L)\n⇤}⇥⇥",
+                        "Context \"${contextInfo.name}\" is closed",
+                        instantiate(definition),
+                    )
+                } else {
+                    CodeBlock.of("lazy {\n⇤%L\n⇤}⇥⇥", instantiate(definition))
+                }
+            return PropertySpec
                 .builder(members.getValue(definition.id), typeName(definition.type), KModifier.PRIVATE)
                 // KotlinPoet indents a delegate twice as a continuation; the block is pulled back so that its
                 // body sits one level below the property, as a human would write it.
-                .delegate(CodeBlock.of("lazy {\n⇤%L\n⇤}⇥⇥", instantiate(definition)))
+                .delegate(body)
                 .build()
+        }
 
         private fun prototype(definition: ServiceDefinition): FunSpec =
             FunSpec
                 .builder(members.getValue(definition.id))
                 .addModifiers(KModifier.PRIVATE)
                 .returns(typeName(definition.type))
-                .addStatement("return %L", instantiate(definition))
-                .build()
+                .apply {
+                    if (contextInfo != null) {
+                        addStatement("check(!closed) { %S }", "Context \"${contextInfo.name}\" is closed")
+                        addStatement("return track(%L)", instantiate(definition))
+                    } else {
+                        addStatement("return %L", instantiate(definition))
+                    }
+                }.build()
 
         /**
          * A service named after its type is called by the type's simple name. An id somebody chose -
@@ -261,6 +392,8 @@ internal class ContainerGenerator(
             val definition = definitions.getValue(id)
 
             return when {
+                definition.instantiation is Instantiation.Parent && parentWriter != null ->
+                    CodeBlock.of("parent.%L", parentWriter.reference((definition.instantiation as Instantiation.Parent).id))
                 definition.inlined -> instantiate(definition)
                 definition.instantiation is Instantiation.External || definition.scope == Scope.Shared ->
                     CodeBlock.of("%N", members.getValue(id))
@@ -269,6 +402,28 @@ internal class ContainerGenerator(
         }
 
         private fun instantiate(definition: ServiceDefinition): CodeBlock {
+            if (definition.instantiation is Instantiation.ContextScope) {
+                val ctx = compiled.contexts.first { it.name == (definition.instantiation as Instantiation.ContextScope).name }
+                val childName = contextClassNames.getValue(ctx.name)
+                val scopeType = typeName(definition.type)
+                val inputType = typeName(ctx.inputType)
+                val handleType = typeName(ctx.handleType)
+                val contextExpr =
+                    if (ctx.factoryId != null) {
+                        CodeBlock.of("%L.create(input)", reference(ctx.factoryId!!))
+                    } else {
+                        CodeBlock.of("input")
+                    }
+                return CodeBlock.of(
+                    "object : %T {\n⇥override fun open(input: %T): %T = %T(this@%N, %L)\n⇤}",
+                    scopeType,
+                    inputType,
+                    handleType,
+                    childName,
+                    containerClassName.simpleName,
+                    contextExpr,
+                )
+            }
             val arguments =
                 definition.arguments
                     .filterValues { it != Argument.Default }
@@ -279,7 +434,8 @@ internal class ContainerGenerator(
                     is Instantiation.Function -> CodeBlock.of("%M", MemberName(instantiation.packageName, instantiation.name))
                     is Instantiation.ObjectFunction -> CodeBlock.of("%T.%N", typeName(instantiation.owner), instantiation.name)
                     is Instantiation.StaticFactory -> CodeBlock.of("%T.%N", typeName(instantiation.owner), instantiation.name)
-                    is Instantiation.External -> error("${definition.describe()} is external and never instantiated")
+                    is Instantiation.External, is Instantiation.Parent, is Instantiation.ContextScope ->
+                        error("${definition.describe()} is never instantiated directly")
                 }
 
             return CodeBlock.of("%L%L", call, parenthesized(arguments))
